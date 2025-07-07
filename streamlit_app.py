@@ -8,7 +8,7 @@ import google.generativeai as genai
 import re
 import ast
 import io
-import docx # Librería para leer archivos .docx
+import docx
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -82,8 +82,10 @@ def post_youtube_reply(youtube_service, parent_id, text):
         request = youtube_service.comments().insert(part="snippet", body={"snippet": {"parentId": parent_id, "textOriginal": text}})
         request.execute()
         st.toast(f"✅ ¡Respuesta mandada!")
+        return True
     except Exception as e:
         st.error(f"Error al publicar la respuesta: {e}")
+        return False
 
 def like_youtube_comment(youtube_service, comment_id):
     try:
@@ -92,13 +94,12 @@ def like_youtube_comment(youtube_service, comment_id):
     except Exception as e:
         st.error(f"Error al dar like: {e}")
 
-# --- NUEVA FUNCIÓN para procesar guiones ---
+# --- Funciones de Lógica y IA ---
 def process_script(script_text):
     special_instructions = re.findall(r'\*\*(.*?)\*\*', script_text, re.DOTALL)
     clean_script = re.sub(r'\*\*(.*?)\*\*', '', script_text)
     return "\n".join(special_instructions), clean_script
 
-# --- Función de IA (Con Personalidad y Procesamiento por Lotes) ---
 def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_instructions=""):
     genai.configure(api_key=gemini_api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -113,22 +114,17 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
-
     prompt = f"""
     Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, breve, con un toque de acidez e irreverencia, pero siempre ingenioso. No usas formalidades.
-
     {instructions_prompt_part}
-
     CONTEXTO DEL VIDEO (GUION):
     ---
     {script}
     ---
-    
     LISTA DE COMENTARIOS A RESPONDER:
     ---
     {formatted_comments}
     ---
-    
     Tu tarea es generar un borrador de respuesta para CADA uno de los comentarios de la lista, siguiendo todas las instrucciones.
     Devuelve tus respuestas en una lista de Python con formato JSON, donde cada objeto tiene un "id" (el número del comentario) y una "respuesta" (el borrador).
     Ejemplo de formato de salida:
@@ -155,7 +151,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.3")
+st.title("🧉 Copiloto de Comunidad v5.5")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -172,20 +168,14 @@ else:
                 del st.session_state[key]
         st.rerun()
 
-    # --- LÓGICA CORREGIDA: Obtenemos los videos UNA SOLA VEZ al inicio ---
     if 'videos' not in st.session_state:
         with st.spinner("Cargando videos de tu canal..."):
             st.session_state.videos = get_channel_videos(youtube_service)
 
-    # --- Botón de Acción Principal (Ahora arriba) ---
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
         else:
-            # Re-verificamos la lista de videos por si acaso
-            if 'videos' not in st.session_state:
-                st.session_state.videos = get_channel_videos(youtube_service)
-
             videos_with_context = [v for v in st.session_state.get('videos', []) if v["id"]["videoId"] in st.session_state.get('scripts', {})]
             if not videos_with_context:
                 st.warning("No hay videos con guion cargado. Subí al menos uno para empezar.")
@@ -221,12 +211,16 @@ else:
                                 if original_index is not None and original_index < len(st.session_state.unanswered_comments):
                                     st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
     
-    # --- Bandeja de Entrada Inteligente ---
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
-        for i, item in enumerate(list(st.session_state.unanswered_comments)):
+        
+        # --- LÓGICA DE RESPUESTA CORREGIDA ---
+        # Creamos una copia de la lista para iterar, para poder modificar la original de forma segura
+        for item in list(st.session_state.unanswered_comments):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
+            comment_id = comment_thread['snippet']['topLevelComment']['id'] # ID del comentario al que responder
+            
             with st.container(border=True):
                 col1, col2 = st.columns([1, 10])
                 with col1: st.image(comment['authorProfileImageUrl'])
@@ -235,24 +229,25 @@ else:
                     st.info(f"_{comment['textDisplay']}_")
 
                 draft = item.get('draft', 'La IA no generó un borrador para este comentario.')
-                edited_draft = st.text_area("Borrador de Respuesta:", value=draft, key=f"text_{i}")
+                edited_draft = st.text_area("Borrador de Respuesta:", value=draft, key=f"text_{comment_id}")
 
                 b_col1, b_col2, b_col3, b_col4 = st.columns([2, 1, 1, 5])
-                if b_col1.button("✅ Publicar Respuesta", key=f"pub_{i}", type="primary"):
-                    post_youtube_reply(youtube_service, comment_thread['id'], edited_draft)
-                    st.session_state.unanswered_comments.remove(item)
-                    st.rerun()
+                if b_col1.button("✅ Publicar Respuesta", key=f"pub_{comment_id}", type="primary"):
+                    # CORRECCIÓN: Usamos el ID del comentario como parentId
+                    success = post_youtube_reply(youtube_service, comment_id, edited_draft)
+                    if success:
+                        st.session_state.unanswered_comments.remove(item)
+                        st.rerun()
                 
-                if b_col2.button("👍 Like", key=f"like_{i}"):
-                    like_youtube_comment(youtube_service, comment_thread['snippet']['topLevelComment']['id'])
+                if b_col2.button("👍 Like", key=f"like_{comment_id}"):
+                    like_youtube_comment(youtube_service, comment_id)
 
-                if b_col3.button("🗑️ Descartar", key=f"del_{i}"):
+                if b_col3.button("🗑️ Descartar", key=f"del_{comment_id}"):
                     st.session_state.unanswered_comments.remove(item)
                     st.rerun()
 
     st.divider()
     
-    # --- Dashboard de Videos y Contexto ---
     with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
         if not st.session_state.get('videos'):
             st.warning("No se encontraron videos en tu canal.")
@@ -278,20 +273,8 @@ else:
                         else: 
                             st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
                             st.success(f"Guion de texto para '{title[:30]}...' cargado.")
-                        st.rerun() # Forzamos un rerun para que el estado se actualice en toda la app
                         
                     elif video_id in st.session_state.scripts:
                         st.success("🟢 Guion cargado.")
                     else:
                         st.error("🔴 Falta guion.")
-
-    # --- NUEVA SECCIÓN DE DEBUG ---
-    with st.expander("🐞 Estado de la Memoria (Debug)"):
-        st.write("Esta sección te ayuda a ver qué guiones tiene la app en memoria en este momento.")
-        if 'scripts' in st.session_state and st.session_state.scripts:
-            st.write("Guiones cargados en esta sesión:")
-            # Mostramos los IDs de los videos que tienen un guion cargado
-            for video_id, script_content in st.session_state.scripts.items():
-                st.write(f"- Video ID: `{video_id}` (Guion de {len(script_content)} caracteres)")
-        else:
-            st.write("Aún no se han cargado guiones en esta sesión.")
