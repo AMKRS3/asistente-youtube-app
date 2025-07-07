@@ -124,7 +124,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
     """
     try:
         response = model.generate_content(prompt)
-        # --- CORRECCIÓN DEL BUG ---
+        # --- CORRECCIÓN DEL BUG v4.3 ---
         # Usamos una expresión regular para encontrar el bloque que parece una lista de Python
         match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if match:
@@ -142,7 +142,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v4.2")
+st.title("🧉 Copiloto de Comunidad v4.3")
 
 # Lógica de Autenticación
 if 'credentials' not in st.session_state:
@@ -238,6 +238,7 @@ else:
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         
+        # Usamos una copia de la lista para poder eliminar elementos de forma segura mientras iteramos
         for i, item in enumerate(list(st.session_state.unanswered_comments)):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
