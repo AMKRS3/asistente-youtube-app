@@ -114,9 +114,10 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
-    # --- ESTA ES LA PERSONALIDAD ORIGINAL QUE FUNCIONABA ---
+    # --- AJUSTE DE PERSONALIDAD ---
     prompt = f"""
-    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, breve, con un toque de acidez e irreverencia, pero siempre ingenioso. No usas formalidades.
+    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). Prioriza dar la respuesta más corta y concisa que la elocuencia permita. No usas formalidades.
+
     {instructions_prompt_part}
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -152,7 +153,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.5 (Estable)")
+st.title("🧉 Copiloto de Comunidad v5.6 (Estable)")
 
 if 'credentials' not in st.session_state:
     authenticate()
