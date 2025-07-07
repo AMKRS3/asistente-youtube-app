@@ -9,7 +9,8 @@ import re
 import ast
 import io
 import docx
-from google.cloud import firestore # Importamos Firestore
+from google.cloud import firestore
+import base64 # Importamos la librería para Base64
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -18,39 +19,48 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Funciones de Conexión a la Base de Datos ---
+# --- Funciones de Conexión a la Base de Datos (Lógica Actualizada) ---
 @st.cache_resource
 def get_db_connection():
-    """Establece conexión con la base de datos Firestore."""
+    """Establece conexión con Firestore usando credenciales codificadas en Base64."""
     try:
-        # Corregimos el formato de la clave privada para que sea un JSON válido
-        key_dict = json.loads(st.secrets["firebase_credentials"])
-        db = firestore.Client.from_service_account_info(key_dict)
+        # Leemos el secreto codificado en Base64
+        creds_b64 = st.secrets["firebase_credentials_b64"]
+        # Decodificamos la cadena Base64 para obtener el JSON original
+        creds_json_str = base64.b64decode(creds_b64).decode("utf-8")
+        # Ahora sí, cargamos el JSON limpio
+        creds_info = json.loads(creds_json_str)
+        
+        db = firestore.Client.from_service_account_info(creds_info)
         return db
     except Exception as e:
-        st.error(f"No se pudo conectar a la base de datos: {e}")
+        st.error(f"Error Crítico al conectar a la Base de Datos: {e}")
         return None
 
 def save_script_to_db(db, user_id, video_id, script_content):
-    """Guarda o actualiza un guion en la base de datos."""
     try:
         doc_ref = db.collection('users').document(user_id).collection('scripts').document(video_id)
         doc_ref.set({'script': script_content})
+        st.toast("✅ Guion guardado en la base de datos.")
         return True
     except Exception as e:
-        st.error(f"Error al guardar el guion en la base de datos: {e}")
+        st.error(f"Error al guardar el guion: {e}")
         return False
 
 def load_scripts_from_db(db, user_id):
-    """Carga todos los guiones de un usuario desde la base de datos."""
     scripts = {}
     try:
         docs = db.collection('users').document(user_id).collection('scripts').stream()
         for doc in docs:
             scripts[doc.id] = doc.to_dict().get('script', '')
+        if scripts:
+            st.toast(f"✅ {len(scripts)} guion(es) cargado(s) desde la base de datos.")
     except Exception as e:
         st.warning(f"No se pudieron cargar los guiones guardados: {e}")
     return scripts
+
+# --- El resto de las funciones (Autenticación, YouTube, IA) no necesitan cambios ---
+# ... (Se mantiene el código estable de la v5.6 / v6.1) ...
 
 # --- Funciones de Autenticación (Estables) ---
 def initialize_flow():
@@ -186,7 +196,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.0")
+st.title("🧉 Copiloto de Comunidad v7.0")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -207,12 +217,13 @@ else:
                     del st.session_state[key]
             st.rerun()
 
-        if 'videos' not in st.session_state:
-            with st.spinner("Cargando videos de tu canal..."):
-                st.session_state.videos = get_channel_videos(youtube_service)
         if 'scripts' not in st.session_state:
             with st.spinner("Cargando guiones desde la base de datos..."):
                 st.session_state.scripts = load_scripts_from_db(db, user_id)
+        
+        if 'videos' not in st.session_state:
+            with st.spinner("Cargando videos de tu canal..."):
+                st.session_state.videos = get_channel_videos(youtube_service)
 
         if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
             if not gemini_api_key:
