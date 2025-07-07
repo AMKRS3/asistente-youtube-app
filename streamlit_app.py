@@ -114,9 +114,10 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
-    # --- PERSONALIDAD MEJORADA ---
+    # --- PERSONALIDAD MEJORADA Y CORREGIDA ---
     prompt = f"""
     Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un Argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma corta, inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). Prioriza dar la respuesta más corta y concisa que la elocuencia permita. No usas formalidades y agradeces siempre los mensajes positivos, con los negativos, a veces no siempre, eres irónico y le agradeces que con su msj ayuda a darle mas visibilidad al video.
+
     {instructions_prompt_part}
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -147,12 +148,13 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
             st.text_area("Respuesta recibida de la IA:", response.text, height=150)
             return []
     except Exception as e:
+        # --- CORRECCIÓN DEL BUG UNBOUNDLOCALERROR ---
+        # Ahora solo mostramos el error 'e', que sí está definido.
         st.error(f"La IA se trabó generando respuestas. Error: {e}")
-        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad (Estable)")
+st.title("🧉 Copiloto de Comunidad v5.6")
 
 if 'credentials' not in st.session_state:
     authenticate()
