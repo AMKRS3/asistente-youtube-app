@@ -158,7 +158,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.1")
+st.title("🧉 Copiloto de Comunidad v5.2")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -176,7 +176,6 @@ else:
         st.rerun()
 
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
-        # ... (código sin cambios) ...
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
         else:
@@ -221,7 +220,6 @@ else:
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         for i, item in enumerate(list(st.session_state.unanswered_comments)):
-            # ... (código de la bandeja sin cambios) ...
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
             with st.container(border=True):
@@ -264,12 +262,10 @@ else:
                 with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                 with col2:
                     st.subheader(title)
-                    # --- CORRECCIÓN DEL BUG DE .DOCX ---
-                    # Eliminamos la restricción de tipo para máxima compatibilidad
-                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=None, key=video_id)
+                    # Aceptamos .docx ahora
+                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md", "docx"], key=video_id)
                     if uploaded_file:
-                        file_name = uploaded_file.name
-                        if file_name.endswith('.docx'):
+                        if uploaded_file.name.endswith('.docx'):
                             try:
                                 doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
                                 full_text = "\n".join([para.text for para in doc.paragraphs])
@@ -277,11 +273,9 @@ else:
                                 st.success(f"Guion .docx para '{title[:30]}...' cargado.")
                             except Exception as e:
                                 st.error(f"Error al leer el archivo .docx: {e}")
-                        elif file_name.endswith('.txt') or file_name.endswith('.md'):
+                        else: # Asumimos txt o md
                             st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
                             st.success(f"Guion de texto para '{title[:30]}...' cargado.")
-                        else:
-                            st.warning("Formato de archivo no soportado. Por favor, sube .txt, .md o .docx.")
                         
                     elif video_id in st.session_state.scripts:
                         st.success("🟢 Guion cargado.")
