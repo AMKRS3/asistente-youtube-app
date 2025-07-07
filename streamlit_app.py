@@ -11,6 +11,7 @@ import io
 import docx
 from google.cloud import firestore
 import base64
+import time
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -197,7 +198,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.0")
+st.title("🧉 Copiloto de Comunidad v6.0 (Estable)")
 
 if 'credentials' not in st.session_state:
     authenticate()
