@@ -7,6 +7,8 @@ import pandas as pd
 import google.generativeai as genai
 import re
 import ast
+import io
+import docx # Librería para leer archivos .docx
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -90,15 +92,40 @@ def like_youtube_comment(youtube_service, comment_id):
     except Exception as e:
         st.error(f"Error al dar like: {e}")
 
-# --- Función de IA (Con Personalidad y Procesamiento por Lotes) ---
-def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
+# --- NUEVA FUNCIÓN para procesar guiones ---
+def process_script(script_text):
+    """
+    Extrae instrucciones especiales (entre **) y limpia el guion.
+    """
+    # Busca todo el texto que esté entre **...**
+    special_instructions = re.findall(r'\*\*(.*?)\*\*', script_text, re.DOTALL)
+    
+    # Elimina las instrucciones especiales del texto del guion
+    clean_script = re.sub(r'\*\*(.*?)\*\*', '', script_text)
+    
+    return "\n".join(special_instructions), clean_script
+
+# --- Función de IA (Ahora con Instrucciones Especiales) ---
+def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_instructions=""):
     genai.configure(api_key=gemini_api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     formatted_comments = "\n".join([f"{i+1}. \"{data['text']}\"" for i, data in enumerate(comments_data)])
 
+    # Construimos la sección de instrucciones especiales solo si existe
+    instructions_prompt_part = ""
+    if special_instructions:
+        instructions_prompt_part = f"""
+        INSTRUCCIONES ESPECIALES PARA ESTE VIDEO (¡MUY IMPORTANTE!):
+        ---
+        {special_instructions}
+        ---
+        """
+
     prompt = f"""
     Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, breve, con un toque de acidez e irreverencia, pero siempre ingenioso. No usas formalidades.
+
+    {instructions_prompt_part}
 
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -110,7 +137,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
     {formatted_comments}
     ---
     
-    Tu tarea es generar un borrador de respuesta para CADA uno de los comentarios de la lista.
+    Tu tarea es generar un borrador de respuesta para CADA uno de los comentarios de la lista, siguiendo todas las instrucciones.
     Devuelve tus respuestas en una lista de Python con formato JSON, donde cada objeto tiene un "id" (el número del comentario) y una "respuesta" (el borrador).
     Ejemplo de formato de salida:
     ```json
@@ -136,12 +163,11 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v4.4")
+st.title("🧉 Copiloto de Comunidad v5.0")
 
 if 'credentials' not in st.session_state:
     authenticate()
 else:
-    # --- Si está autenticado, mostramos la app principal ---
     credentials = st.session_state.credentials
     youtube_service = get_youtube_service(credentials)
     gemini_api_key = st.secrets.get("gemini_api_key")
@@ -154,7 +180,6 @@ else:
                 del st.session_state[key]
         st.rerun()
 
-    # --- NUEVA ESTRUCTURA: ACCIÓN Y BANDEJA DE ENTRADA PRIMERO ---
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
@@ -186,9 +211,11 @@ else:
 
                     with st.spinner("La IA está preparando los borradores con onda..."):
                         for video_id, comments_data in comments_by_video.items():
-                            script = st.session_state.scripts.get(video_id, "")
+                            full_script_text = st.session_state.scripts.get(video_id, "")
+                            special_instructions, clean_script = process_script(full_script_text)
+                            
                             id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
-                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, script, comments_data)
+                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, comments_data, special_instructions)
                             
                             for draft in drafts_list:
                                 original_index = id_to_index_map.get(draft['id'])
@@ -225,10 +252,10 @@ else:
                 if b_col3.button("🗑️ Descartar", key=f"del_{i}"):
                     st.session_state.unanswered_comments.remove(item)
                     st.rerun()
-    
+
     st.divider()
     
-    # --- Dashboard de Videos y Contexto (Ahora al final) ---
+    # --- Dashboard de Videos y Contexto ---
     with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
         if 'videos' not in st.session_state:
             st.session_state.videos = get_channel_videos(youtube_service)
@@ -244,11 +271,18 @@ else:
                 with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                 with col2:
                     st.subheader(title)
-                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md"], key=video_id)
+                    # Aceptamos .docx ahora
+                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md", "docx"], key=video_id)
                     if uploaded_file:
-                        st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
+                        if uploaded_file.name.endswith('.docx'):
+                            doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
+                            full_text = "\n".join([para.text for para in doc.paragraphs])
+                            st.session_state.scripts[video_id] = full_text
+                        else:
+                            st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
                         st.success(f"Guion para '{title[:30]}...' cargado.")
                     elif video_id in st.session_state.scripts:
                         st.success("🟢 Guion cargado.")
                     else:
                         st.error("🔴 Falta guion.")
+
