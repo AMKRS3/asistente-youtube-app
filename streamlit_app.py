@@ -9,7 +9,7 @@ import re
 import ast
 import io
 import docx
-from google.cloud import firestore # Importamos Firestore
+from google.cloud import firestore
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -21,26 +21,36 @@ st.set_page_config(
 # --- Funciones de Conexión a la Base de Datos ---
 @st.cache_resource
 def get_db_connection():
-    """Establece conexión con la base de datos Firestore."""
     try:
         creds_json = json.loads(st.secrets["firebase_credentials"])
         db = firestore.Client.from_service_account_info(creds_json)
+        # Hacemos una pequeña prueba para ver si la conexión es real
+        db.collection('test').document('test').get()
         return db
     except Exception as e:
-        st.error(f"No se pudo conectar a la base de datos: {e}")
+        st.error(f"Error Crítico al conectar a la Base de Datos: {e}")
         return None
 
 def save_script_to_db(db, user_id, video_id, script_content):
-    """Guarda o actualiza un guion en la base de datos."""
-    doc_ref = db.collection('users').document(user_id).collection('scripts').document(video_id)
-    doc_ref.set({'script': script_content})
+    try:
+        doc_ref = db.collection('users').document(user_id).collection('scripts').document(video_id)
+        doc_ref.set({'script': script_content})
+        st.toast("✅ Guion guardado en la base de datos.")
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar el guion en la base de datos: {e}")
+        return False
 
 def load_scripts_from_db(db, user_id):
-    """Carga todos los guiones de un usuario desde la base de datos."""
     scripts = {}
-    docs = db.collection('users').document(user_id).collection('scripts').stream()
-    for doc in docs:
-        scripts[doc.id] = doc.to_dict().get('script', '')
+    try:
+        docs = db.collection('users').document(user_id).collection('scripts').stream()
+        for doc in docs:
+            scripts[doc.id] = doc.to_dict().get('script', '')
+        if scripts:
+            st.toast(f"✅ {len(scripts)} guion(es) cargado(s) desde la base de datos.")
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los guiones guardados: {e}")
     return scripts
 
 # --- Funciones de Autenticación (Estables) ---
@@ -177,7 +187,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.0")
+st.title("🧉 Copiloto de Comunidad v6.1")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -187,127 +197,126 @@ else:
     gemini_api_key = st.secrets.get("gemini_api_key")
     db = get_db_connection()
 
-    # Usamos el ID de usuario de Google como identificador único para la base de datos
-    user_id = credentials.id_token['sub']
+    if db:
+        user_id = credentials.id_token['sub']
 
-    st.sidebar.success(f"Conectado como: {credentials.id_token['email']}")
-    if st.sidebar.button("Cerrar Sesión"):
-        keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
-        for key in keys_to_delete:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.rerun()
+        st.sidebar.success(f"Conectado como: {credentials.id_token['email']}")
+        if st.sidebar.button("Cerrar Sesión"):
+            keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
+            for key in keys_to_delete:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
-    # Cargamos los videos y los guiones guardados al inicio
-    if 'videos' not in st.session_state:
-        with st.spinner("Cargando videos de tu canal..."):
-            st.session_state.videos = get_channel_videos(youtube_service)
-    if 'scripts' not in st.session_state:
-        with st.spinner("Cargando guiones desde la base de datos..."):
-            st.session_state.scripts = load_scripts_from_db(db, user_id)
+        if 'videos' not in st.session_state:
+            with st.spinner("Cargando videos de tu canal..."):
+                st.session_state.videos = get_channel_videos(youtube_service)
+        if 'scripts' not in st.session_state:
+            with st.spinner("Cargando guiones desde la base de datos..."):
+                st.session_state.scripts = load_scripts_from_db(db, user_id)
 
-    if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
-        if not gemini_api_key:
-            st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
-        else:
-            videos_with_context = [v for v in st.session_state.get('videos', []) if v["id"]["videoId"] in st.session_state.get('scripts', {})]
-            if not videos_with_context:
-                st.warning("No hay videos con guion cargado. Subí al menos uno para empezar.")
+        if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
+            if not gemini_api_key:
+                st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
             else:
-                st.session_state.unanswered_comments = []
-                with st.spinner("Buscando comentarios nuevos en el canal..."):
-                    for video in videos_with_context:
-                        comments = get_unanswered_comments(youtube_service, video["id"]["videoId"])
-                        for comment in comments:
-                            st.session_state.unanswered_comments.append({"video": video, "comment_thread": comment})
-                
-                if not st.session_state.unanswered_comments:
-                    st.success("¡Capo! No tenés comentarios sin responder. Andá a tomar unos mates.")
+                videos_with_context = [v for v in st.session_state.get('videos', []) if v["id"]["videoId"] in st.session_state.get('scripts', {})]
+                if not videos_with_context:
+                    st.warning("No hay videos con guion cargado. Subí al menos uno para empezar.")
                 else:
-                    comments_by_video = {}
-                    for i, item in enumerate(st.session_state.unanswered_comments):
-                        video_id = item['video']['id']['videoId']
-                        if video_id not in comments_by_video:
-                            comments_by_video[video_id] = []
-                        comment_data = {"text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'], "original_index": i}
-                        comments_by_video[video_id].append(comment_data)
+                    st.session_state.unanswered_comments = []
+                    with st.spinner("Buscando comentarios nuevos en el canal..."):
+                        for video in videos_with_context:
+                            comments = get_unanswered_comments(youtube_service, video["id"]["videoId"])
+                            for comment in comments:
+                                st.session_state.unanswered_comments.append({"video": video, "comment_thread": comment})
+                    
+                    if not st.session_state.unanswered_comments:
+                        st.success("¡Capo! No tenés comentarios sin responder. Andá a tomar unos mates.")
+                    else:
+                        comments_by_video = {}
+                        for i, item in enumerate(st.session_state.unanswered_comments):
+                            video_id = item['video']['id']['videoId']
+                            if video_id not in comments_by_video:
+                                comments_by_video[video_id] = []
+                            comment_data = {"text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'], "original_index": i}
+                            comments_by_video[video_id].append(comment_data)
 
-                    with st.spinner("La IA está preparando los borradores con onda..."):
-                        for video_id, comments_data in comments_by_video.items():
-                            full_script_text = st.session_state.scripts.get(video_id, "")
-                            special_instructions, clean_script = process_script(full_script_text)
-                            
-                            id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
-                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, comments_data, special_instructions)
-                            
-                            for draft in drafts_list:
-                                original_index = id_to_index_map.get(draft['id'])
-                                if original_index is not None and original_index < len(st.session_state.unanswered_comments):
-                                    st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
-    
-    if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
-        st.header("📬 Bandeja de Entrada Inteligente")
-        for item in list(st.session_state.unanswered_comments):
-            comment_thread = item['comment_thread']
-            comment = comment_thread['snippet']['topLevelComment']['snippet']
-            comment_id = comment_thread['snippet']['topLevelComment']['id']
-            
-            with st.container(border=True):
-                col1, col2 = st.columns([1, 10])
-                with col1: st.image(comment['authorProfileImageUrl'])
-                with col2:
-                    st.write(f"**{comment['authorDisplayName']}** en *{item['video']['snippet']['title']}*:")
-                    st.info(f"_{comment['textDisplay']}_")
+                        with st.spinner("La IA está preparando los borradores con onda..."):
+                            for video_id, comments_data in comments_by_video.items():
+                                full_script_text = st.session_state.scripts.get(video_id, "")
+                                special_instructions, clean_script = process_script(full_script_text)
+                                
+                                id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
+                                drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, comments_data, special_instructions)
+                                
+                                for draft in drafts_list:
+                                    original_index = id_to_index_map.get(draft['id'])
+                                    if original_index is not None and original_index < len(st.session_state.unanswered_comments):
+                                        st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
+        
+        if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
+            st.header("📬 Bandeja de Entrada Inteligente")
+            for item in list(st.session_state.unanswered_comments):
+                comment_thread = item['comment_thread']
+                comment = comment_thread['snippet']['topLevelComment']['snippet']
+                comment_id = comment_thread['snippet']['topLevelComment']['id']
+                
+                with st.container(border=True):
+                    col1, col2 = st.columns([1, 10])
+                    with col1: st.image(comment['authorProfileImageUrl'])
+                    with col2:
+                        st.write(f"**{comment['authorDisplayName']}** en *{item['video']['snippet']['title']}*:")
+                        st.info(f"_{comment['textDisplay']}_")
 
-                draft = item.get('draft', 'La IA no generó un borrador para este comentario.')
-                edited_draft = st.text_area("Borrador de Respuesta:", value=draft, key=f"text_{comment_id}")
+                    draft = item.get('draft', 'La IA no generó un borrador para este comentario.')
+                    edited_draft = st.text_area("Borrador de Respuesta:", value=draft, key=f"text_{comment_id}")
 
-                b_col1, b_col2, b_col3, b_col4 = st.columns([2, 1, 1, 5])
-                if b_col1.button("✅ Publicar Respuesta", key=f"pub_{comment_id}", type="primary"):
-                    success = post_youtube_reply(youtube_service, comment_id, edited_draft)
-                    if success:
+                    b_col1, b_col2, b_col3, b_col4 = st.columns([2, 1, 1, 5])
+                    if b_col1.button("✅ Publicar Respuesta", key=f"pub_{comment_id}", type="primary"):
+                        success = post_youtube_reply(youtube_service, comment_id, edited_draft)
+                        if success:
+                            st.session_state.unanswered_comments.remove(item)
+                            st.rerun()
+                    
+                    if b_col2.button("👍 Like", key=f"like_{comment_id}"):
+                        like_youtube_comment(youtube_service, comment_id)
+
+                    if b_col3.button("🗑️ Descartar", key=f"del_{comment_id}"):
                         st.session_state.unanswered_comments.remove(item)
                         st.rerun()
-                
-                if b_col2.button("👍 Like", key=f"like_{comment_id}"):
-                    like_youtube_comment(youtube_service, comment_id)
 
-                if b_col3.button("🗑️ Descartar", key=f"del_{comment_id}"):
-                    st.session_state.unanswered_comments.remove(item)
-                    st.rerun()
+        st.divider()
+        
+        with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
+            if not st.session_state.get('videos'):
+                st.warning("No se encontraron videos en tu canal.")
+            else:
+                if 'scripts' not in st.session_state: st.session_state.scripts = {}
+                for video in st.session_state.videos:
+                    video_id = video["id"]["videoId"]
+                    title = video["snippet"]["title"]
+                    col1, col2 = st.columns([1, 4])
+                    with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
+                    with col2:
+                        st.subheader(title)
+                        uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=video_id)
+                        if uploaded_file:
+                            if uploaded_file.name.endswith('.docx'):
+                                try:
+                                    doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
+                                    full_text = "\n".join([para.text for para in doc.paragraphs])
+                                except Exception as e:
+                                    st.error(f"Error al leer el archivo .docx: {e}")
+                                    full_text = ""
+                            else: 
+                                full_text = uploaded_file.getvalue().decode("utf-8")
+                            
+                            if full_text:
+                                if save_script_to_db(db, user_id, video_id, full_text):
+                                    st.session_state.scripts[video_id] = full_text
+                                    st.rerun()
 
-    st.divider()
-    
-    with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
-        if not st.session_state.get('videos'):
-            st.warning("No se encontraron videos en tu canal.")
-        else:
-            if 'scripts' not in st.session_state: st.session_state.scripts = {}
-            for video in st.session_state.videos:
-                video_id = video["id"]["videoId"]
-                title = video["snippet"]["title"]
-                col1, col2 = st.columns([1, 4])
-                with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
-                with col2:
-                    st.subheader(title)
-                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=video_id)
-                    if uploaded_file:
-                        if uploaded_file.name.endswith('.docx'):
-                            try:
-                                doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
-                                full_text = "\n".join([para.text for para in doc.paragraphs])
-                                save_script_to_db(db, user_id, video_id, full_text)
-                                st.session_state.scripts[video_id] = full_text
-                                st.success(f"Guion .docx para '{title[:30]}...' guardado en la base de datos.")
-                            except Exception as e:
-                                st.error(f"Error al leer el archivo .docx: {e}")
-                        else: 
-                            full_text = uploaded_file.getvalue().decode("utf-8")
-                            save_script_to_db(db, user_id, video_id, full_text)
-                            st.session_state.scripts[video_id] = full_text
-                            st.success(f"Guion de texto para '{title[:30]}...' guardado en la base de datos.")
-                        
-                    elif video_id in st.session_state.scripts:
-                        st.success("🟢 Guion cargado desde la base de datos.")
-                    else:
-                        st.error("🔴 Falta guion.")
+                        elif video_id in st.session_state.scripts:
+                            st.success("🟢 Guion cargado desde la base de datos.")
+                        else:
+                            st.error("🔴 Falta guion.")
