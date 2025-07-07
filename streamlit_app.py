@@ -6,7 +6,7 @@ import json
 import pandas as pd
 import google.generativeai as genai
 import re
-import ast # Importamos la librería para evaluación segura de literales de Python
+import ast
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -16,7 +16,6 @@ st.set_page_config(
 )
 
 # --- Funciones de Autenticación (Estables) ---
-
 def initialize_flow():
     if 'google_credentials' not in st.secrets or 'APP_URL' not in st.secrets:
         st.error("Error de configuración: Faltan los secretos 'google_credentials' o 'APP_URL'.")
@@ -49,7 +48,6 @@ def authenticate():
     return None
 
 # --- Funciones de la API de YouTube (Con 'Like') ---
-
 def get_youtube_service(credentials):
     return build('youtube', 'v3', credentials=credentials)
 
@@ -124,13 +122,9 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
     """
     try:
         response = model.generate_content(prompt)
-        # --- CORRECCIÓN DEL BUG v4.3 ---
-        # Usamos una expresión regular para encontrar el bloque que parece una lista de Python
         match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if match:
-            # Extraemos el texto que parece una lista
             list_str = match.group(0)
-            # Usamos ast.literal_eval para convertir de forma segura el string a una lista de Python
             return ast.literal_eval(list_str)
         else:
             st.error("La IA no devolvió una lista con formato válido.")
@@ -142,9 +136,8 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v4.3")
+st.title("🧉 Copiloto de Comunidad v4.4")
 
-# Lógica de Autenticación
 if 'credentials' not in st.session_state:
     authenticate()
 else:
@@ -153,7 +146,6 @@ else:
     youtube_service = get_youtube_service(credentials)
     gemini_api_key = st.secrets.get("gemini_api_key")
 
-    # Barra Lateral
     st.sidebar.success("Conectado a YouTube")
     if st.sidebar.button("Cerrar Sesión"):
         keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
@@ -162,7 +154,7 @@ else:
                 del st.session_state[key]
         st.rerun()
 
-    # Botón de Acción Principal (Ahora arriba)
+    # --- NUEVA ESTRUCTURA: ACCIÓN Y BANDEJA DE ENTRADA PRIMERO ---
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
@@ -189,11 +181,7 @@ else:
                         video_id = item['video']['id']['videoId']
                         if video_id not in comments_by_video:
                             comments_by_video[video_id] = []
-                        
-                        comment_data = {
-                            "text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'],
-                            "original_index": i
-                        }
+                        comment_data = {"text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'], "original_index": i}
                         comments_by_video[video_id].append(comment_data)
 
                     with st.spinner("La IA está preparando los borradores con onda..."):
@@ -207,38 +195,10 @@ else:
                                 if original_index is not None and original_index < len(st.session_state.unanswered_comments):
                                     st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
     
-    # --- Dashboard de Videos y Contexto ---
-    st.header("🎬 Tus Videos y Contextos")
-    if 'videos' not in st.session_state:
-        st.session_state.videos = get_channel_videos(youtube_service)
-    
-    if not st.session_state.videos:
-        st.warning("No se encontraron videos en tu canal.")
-    else:
-        if 'scripts' not in st.session_state: st.session_state.scripts = {}
-        for video in st.session_state.videos:
-            video_id = video["id"]["videoId"]
-            title = video["snippet"]["title"]
-            col1, col2 = st.columns([1, 4])
-            with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
-            with col2:
-                st.subheader(title)
-                uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md"], key=video_id)
-                if uploaded_file:
-                    st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
-                    st.success(f"Guion para '{title[:30]}...' cargado.")
-                elif video_id in st.session_state.scripts:
-                    st.success("🟢 Guion cargado.")
-                else:
-                    st.error("🔴 Falta guion.")
-
-    st.divider()
-
     # --- Bandeja de Entrada Inteligente ---
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         
-        # Usamos una copia de la lista para poder eliminar elementos de forma segura mientras iteramos
         for i, item in enumerate(list(st.session_state.unanswered_comments)):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
@@ -265,3 +225,30 @@ else:
                 if b_col3.button("🗑️ Descartar", key=f"del_{i}"):
                     st.session_state.unanswered_comments.remove(item)
                     st.rerun()
+    
+    st.divider()
+    
+    # --- Dashboard de Videos y Contexto (Ahora al final) ---
+    with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
+        if 'videos' not in st.session_state:
+            st.session_state.videos = get_channel_videos(youtube_service)
+        
+        if not st.session_state.videos:
+            st.warning("No se encontraron videos en tu canal.")
+        else:
+            if 'scripts' not in st.session_state: st.session_state.scripts = {}
+            for video in st.session_state.videos:
+                video_id = video["id"]["videoId"]
+                title = video["snippet"]["title"]
+                col1, col2 = st.columns([1, 4])
+                with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
+                with col2:
+                    st.subheader(title)
+                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md"], key=video_id)
+                    if uploaded_file:
+                        st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
+                        st.success(f"Guion para '{title[:30]}...' cargado.")
+                    elif video_id in st.session_state.scripts:
+                        st.success("🟢 Guion cargado.")
+                    else:
+                        st.error("🔴 Falta guion.")
