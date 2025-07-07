@@ -26,7 +26,7 @@ def initialize_flow():
     redirect_uri = st.secrets["APP_URL"]
     return Flow.from_client_config(
         client_config=client_config,
-        scopes=['https://www.googleapis.com/auth/youtube.force-ssl'],
+        scopes=['[https://www.googleapis.com/auth/youtube.force-ssl](https://www.googleapis.com/auth/youtube.force-ssl)'],
         redirect_uri=redirect_uri
     )
 
@@ -114,23 +114,17 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
-    
-    # --- AJUSTE DE PERSONALIDAD ---
     prompt = f"""
     Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). No usas formalidades.
-
     {instructions_prompt_part}
-
     CONTEXTO DEL VIDEO (GUION):
     ---
     {script}
     ---
-    
     LISTA DE COMENTARIOS A RESPONDER:
     ---
     {formatted_comments}
     ---
-    
     Tu tarea es generar un borrador de respuesta para CADA uno de los comentarios de la lista, siguiendo todas las instrucciones.
     Devuelve tus respuestas en una lista de Python con formato JSON, donde cada objeto tiene un "id" (el número del comentario) y una "respuesta" (el borrador).
     Ejemplo de formato de salida:
@@ -143,21 +137,37 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
     """
     try:
         response = model.generate_content(prompt)
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        # --- LÓGICA DE PARSEO MEJORADA ---
+        text_response = response.text
+        # Busca un bloque de código JSON o Python y lo extrae
+        match = re.search(r'```(json|python)\s*([\s\S]*?)\s*```', text_response)
         if match:
-            list_str = match.group(0)
+            # Si lo encuentra, trabaja con el contenido del bloque
+            content = match.group(2)
+            # Busca la lista dentro de ese contenido
+            list_match = re.search(r'\[[\s\S]*\]', content)
+            if list_match:
+                list_str = list_match.group(0)
+                return ast.literal_eval(list_str)
+        
+        # Si no encuentra un bloque de código, busca la lista directamente en todo el texto
+        list_match = re.search(r'\[[\s\S]*\]', text_response)
+        if list_match:
+            list_str = list_match.group(0)
             return ast.literal_eval(list_str)
-        else:
-            st.error("La IA no devolvió una lista con formato válido.")
-            st.text_area("Respuesta recibida de la IA:", response.text, height=150)
-            return []
+
+        # Si nada de lo anterior funciona, muestra el error
+        st.error("La IA no devolvió una lista con formato válido después de varios intentos de limpieza.")
+        st.text_area("Respuesta recibida de la IA:", text_response, height=200)
+        return []
+            
     except Exception as e:
-        st.error(f"La IA se trabó generando respuestas. Error: {e}")
-        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
+        st.error(f"La IA se trabó generando respuestas o el formato era incorrecto. Error: {e}")
+        st.text_area("Respuesta recibida de la IA:", response.text, height=200)
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.6")
+st.title("🧉 Copiloto de Comunidad v5.7")
 
 if 'credentials' not in st.session_state:
     authenticate()
