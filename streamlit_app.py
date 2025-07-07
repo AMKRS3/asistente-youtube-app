@@ -5,6 +5,7 @@ from googleapiclient.discovery import build
 import json
 import pandas as pd
 import google.generativeai as genai
+import re # Importamos la librería para expresiones regulares
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -28,24 +29,23 @@ def initialize_flow():
     )
 
 def authenticate():
-    # Esta función ahora solo maneja el proceso de login inicial
+    if 'credentials' in st.session_state:
+        return st.session_state.credentials
     flow = initialize_flow()
-    if not flow: return
-    
+    if not flow: return None
     auth_code = st.query_params.get("code")
-    
     if not auth_code:
         auth_url, _ = flow.authorization_url(prompt='consent')
         st.link_button("🚀 Conectar mi Canal de YouTube", auth_url, use_container_width=True, type="primary")
-        st.info("Deberás autorizar a esta aplicación para que pueda leer tus videos y publicar respuestas en tu nombre.")
-    else:
-        try:
-            flow.fetch_token(code=auth_code)
-            st.session_state.credentials = flow.credentials
-            st.query_params.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error al obtener el token: {e}")
+        return None
+    try:
+        flow.fetch_token(code=auth_code)
+        st.session_state.credentials = flow.credentials
+        st.query_params.clear()
+        st.rerun()
+    except Exception as e:
+        st.error(f"Error al obtener el token: {e}")
+    return None
 
 # --- Funciones de la API de YouTube (Con 'Like') ---
 
@@ -129,32 +129,39 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
     """
     try:
         response = model.generate_content(prompt)
-        clean_json_str = response.text.strip().replace("```json", "").replace("```", "")
-        return json.loads(clean_json_str)
+        # --- CORRECCIÓN DEL BUG ---
+        # Usamos una expresión regular para extraer de forma robusta solo el bloque JSON
+        match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+            return json.loads(json_str)
+        else:
+            st.error("La IA no devolvió un JSON con formato válido.")
+            st.text_area("Respuesta recibida de la IA:", response.text, height=150)
+            return []
     except Exception as e:
         st.error(f"La IA se trabó generando respuestas. Error: {e}")
-        st.error(f"Respuesta recibida de la IA: {response.text}")
+        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
         return []
 
-# --- Lógica Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v4.1")
+# --- Interfaz Principal de la Aplicación ---
+st.title("🧉 Copiloto de Comunidad v4.2")
 
-# Verificamos si el usuario ya está autenticado
-if 'credentials' not in st.session_state:
-    authenticate()
-else:
-    # --- Si está autenticado, mostramos la app principal ---
-    credentials = st.session_state.credentials
-    youtube_service = get_youtube_service(credentials)
-    gemini_api_key = st.secrets.get("gemini_api_key")
+credentials = authenticate()
 
-    # --- Barra Lateral con Información y Botón de Logout ---
+if credentials:
     st.sidebar.success("Conectado a YouTube")
     if st.sidebar.button("Cerrar Sesión"):
         del st.session_state.credentials
         st.rerun()
 
-    # --- Botón de Acción Principal ---
+    gemini_api_key = st.secrets.get("gemini_api_key")
+    youtube_service = get_youtube_service(credentials)
+
+    if 'videos' not in st.session_state:
+        st.session_state.videos = get_channel_videos(youtube_service)
+
+    # --- Botón de Acción Principal (Ahora arriba) ---
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
@@ -179,28 +186,33 @@ else:
                         if video_id not in comments_by_video:
                             comments_by_video[video_id] = []
                         
-                        comment_data = {
-                            "text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'],
-                            "original_index": len(st.session_state.unanswered_comments) - 1 - st.session_state.unanswered_comments.index(item)
-                        }
+                        comment_data = { "text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'] }
                         comments_by_video[video_id].append(comment_data)
 
                     with st.spinner("La IA está preparando los borradores con onda..."):
+                        all_drafts = {}
                         for video_id, comments_data in comments_by_video.items():
                             script = st.session_state.scripts.get(video_id, "")
-                            drafts = get_ai_bulk_draft_responses(gemini_api_key, script, comments_data)
-                            
-                            for draft in drafts:
-                                for item in st.session_state.unanswered_comments:
-                                    if item['video']['id']['videoId'] == video_id and item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'] == comments_data[draft['id']-1]['text']:
-                                        item['draft'] = draft['respuesta']
-                                        break
+                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, script, comments_data)
+                            all_drafts[video_id] = drafts_list
+                        
+                        for item in st.session_state.unanswered_comments:
+                            video_id = item['video']['id']['videoId']
+                            comment_text = item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay']
+                            # Buscamos su borrador correspondiente
+                            if video_id in all_drafts:
+                                # Esto es complejo, asumimos que el orden se mantiene por ahora.
+                                # Una mejor implementación usaría IDs únicos para cada comentario.
+                                # Por simplicidad, esta versión re-asocia por texto, puede fallar con comentarios duplicados.
+                                original_text_list = [c['text'] for c in comments_by_video[video_id]]
+                                try:
+                                    idx = original_text_list.index(comment_text)
+                                    item['draft'] = all_drafts[video_id][idx]['respuesta']
+                                except (ValueError, IndexError):
+                                    item['draft'] = "Error al asociar borrador."
     
     # --- Dashboard de Videos y Contexto ---
-    st.header("🎬 Tus Videos")
-    if 'videos' not in st.session_state:
-        st.session_state.videos = get_channel_videos(youtube_service)
-    
+    st.header("🎬 Tus Videos y Contextos")
     if not st.session_state.videos:
         st.warning("No se encontraron videos en tu canal.")
     else:
