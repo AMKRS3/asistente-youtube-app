@@ -59,9 +59,6 @@ def load_scripts_from_db(db, user_id):
         st.warning(f"No se pudieron cargar los guiones guardados: {e}")
     return scripts
 
-# --- El resto de las funciones (Autenticación, YouTube, IA) no necesitan cambios ---
-# ... (Se mantiene el código estable de la v5.6 / v6.1) ...
-
 # --- Funciones de Autenticación (Estables) ---
 def initialize_flow():
     if 'google_credentials' not in st.secrets or 'APP_URL' not in st.secrets:
@@ -69,9 +66,20 @@ def initialize_flow():
         return None
     client_config = json.loads(st.secrets["google_credentials"])
     redirect_uri = st.secrets["APP_URL"]
+    
+    # --- CORRECCIÓN IMPORTANTE: Añadimos los permisos de OpenID ---
+    # Esto le pide a Google el "carnet de identidad" del usuario (id_token)
+    # además del permiso para gestionar YouTube.
+    scopes = [
+        'https://www.googleapis.com/auth/youtube.force-ssl',
+        'openid',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile'
+    ]
+    
     return Flow.from_client_config(
         client_config=client_config,
-        scopes=['https://www.googleapis.com/auth/youtube.force-ssl'],
+        scopes=scopes,
         redirect_uri=redirect_uri
     )
 
@@ -196,7 +204,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v7.0")
+st.title("🧉 Copiloto de Comunidad v7.1")
 
 if 'credentials' not in st.session_state:
     authenticate()
