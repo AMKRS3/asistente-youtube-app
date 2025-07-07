@@ -114,17 +114,23 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
+    
+    # --- AJUSTE DE PERSONALIDAD ---
     prompt = f"""
-    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, breve, con un toque de acidez e irreverencia, pero siempre ingenioso. No usas formalidades.
+    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). No usas formalidades.
+
     {instructions_prompt_part}
+
     CONTEXTO DEL VIDEO (GUION):
     ---
     {script}
     ---
+    
     LISTA DE COMENTARIOS A RESPONDER:
     ---
     {formatted_comments}
     ---
+    
     Tu tarea es generar un borrador de respuesta para CADA uno de los comentarios de la lista, siguiendo todas las instrucciones.
     Devuelve tus respuestas en una lista de Python con formato JSON, donde cada objeto tiene un "id" (el número del comentario) y una "respuesta" (el borrador).
     Ejemplo de formato de salida:
@@ -151,7 +157,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.5")
+st.title("🧉 Copiloto de Comunidad v5.6")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -214,12 +220,10 @@ else:
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         
-        # --- LÓGICA DE RESPUESTA CORREGIDA ---
-        # Creamos una copia de la lista para iterar, para poder modificar la original de forma segura
         for item in list(st.session_state.unanswered_comments):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
-            comment_id = comment_thread['snippet']['topLevelComment']['id'] # ID del comentario al que responder
+            comment_id = comment_thread['snippet']['topLevelComment']['id']
             
             with st.container(border=True):
                 col1, col2 = st.columns([1, 10])
@@ -233,7 +237,6 @@ else:
 
                 b_col1, b_col2, b_col3, b_col4 = st.columns([2, 1, 1, 5])
                 if b_col1.button("✅ Publicar Respuesta", key=f"pub_{comment_id}", type="primary"):
-                    # CORRECCIÓN: Usamos el ID del comentario como parentId
                     success = post_youtube_reply(youtube_service, comment_id, edited_draft)
                     if success:
                         st.session_state.unanswered_comments.remove(item)
