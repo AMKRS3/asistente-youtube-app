@@ -26,7 +26,7 @@ def initialize_flow():
     redirect_uri = st.secrets["APP_URL"]
     return Flow.from_client_config(
         client_config=client_config,
-        scopes=['[https://www.googleapis.com/auth/youtube.force-ssl](https://www.googleapis.com/auth/youtube.force-ssl)'],
+        scopes=['https://www.googleapis.com/auth/youtube.force-ssl'],
         redirect_uri=redirect_uri
     )
 
@@ -37,7 +37,8 @@ def authenticate():
     if not flow: return None
     auth_code = st.query_params.get("code")
     if not auth_code:
-        auth_url, _ = flow.authorization_url(prompt='consent')
+        # --- CAMBIO IMPORTANTE: Forzamos el selector de cuentas ---
+        auth_url, _ = flow.authorization_url(prompt='select_account')
         st.link_button("🚀 Conectar mi Canal de YouTube", auth_url, use_container_width=True, type="primary")
         return None
     try:
@@ -137,33 +138,17 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
     """
     try:
         response = model.generate_content(prompt)
-        # --- LÓGICA DE PARSEO MEJORADA ---
-        text_response = response.text
-        # Busca un bloque de código JSON o Python y lo extrae
-        match = re.search(r'```(json|python)\s*([\s\S]*?)\s*```', text_response)
+        match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if match:
-            # Si lo encuentra, trabaja con el contenido del bloque
-            content = match.group(2)
-            # Busca la lista dentro de ese contenido
-            list_match = re.search(r'\[[\s\S]*\]', content)
-            if list_match:
-                list_str = list_match.group(0)
-                return ast.literal_eval(list_str)
-        
-        # Si no encuentra un bloque de código, busca la lista directamente en todo el texto
-        list_match = re.search(r'\[[\s\S]*\]', text_response)
-        if list_match:
-            list_str = list_match.group(0)
+            list_str = match.group(0)
             return ast.literal_eval(list_str)
-
-        # Si nada de lo anterior funciona, muestra el error
-        st.error("La IA no devolvió una lista con formato válido después de varios intentos de limpieza.")
-        st.text_area("Respuesta recibida de la IA:", text_response, height=200)
-        return []
-            
+        else:
+            st.error("La IA no devolvió una lista con formato válido.")
+            st.text_area("Respuesta recibida de la IA:", response.text, height=150)
+            return []
     except Exception as e:
-        st.error(f"La IA se trabó generando respuestas o el formato era incorrecto. Error: {e}")
-        st.text_area("Respuesta recibida de la IA:", response.text, height=200)
+        st.error(f"La IA se trabó generando respuestas. Error: {e}")
+        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
         return []
 
 # --- Interfaz Principal de la Aplicación ---
