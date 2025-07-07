@@ -7,6 +7,8 @@ import pandas as pd
 import google.generativeai as genai
 import re
 import ast
+import io
+import docx # Librería para leer archivos .docx
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -90,6 +92,12 @@ def like_youtube_comment(youtube_service, comment_id):
     except Exception as e:
         st.error(f"Error al dar like: {e}")
 
+# --- NUEVA FUNCIÓN para procesar guiones ---
+def process_script(script_text):
+    special_instructions = re.findall(r'\*\*(.*?)\*\*', script_text, re.DOTALL)
+    clean_script = re.sub(r'\*\*(.*?)\*\*', '', script_text)
+    return "\n".join(special_instructions), clean_script
+
 # --- Función de IA (Con Personalidad y Procesamiento por Lotes) ---
 def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_instructions=""):
     genai.configure(api_key=gemini_api_key)
@@ -133,36 +141,21 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
     """
     try:
         response = model.generate_content(prompt)
-        
-        # --- CORRECCIÓN DEFINITIVA v5.3 ---
-        # Lógica robusta para encontrar y extraer la lista de la respuesta de la IA.
-        text_response = response.text
-        
-        # Intentamos varios patrones para encontrar la lista
-        match = re.search(r'```json\s*(\[[\s\S]*?\])\s*```', text_response)
-        if not match:
-            match = re.search(r'```python\s*(\[[\s\S]*?\])\s*```', text_response)
-        if not match:
-            match = re.search(r'=\s*(\[[\s\S]*?\])', text_response)
-        if not match:
-            match = re.search(r'(\[[\s\S]*?\])', text_response)
-
+        match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if match:
-            list_str = match.group(1) if match.groups() else match.group(0)
-            # Usamos ast.literal_eval para convertir de forma segura el string a una lista de Python
+            list_str = match.group(0)
             return ast.literal_eval(list_str)
         else:
-            st.error("La IA no devolvió una lista con formato válido después de varios intentos de limpieza.")
-            st.text_area("Respuesta recibida de la IA:", text_response, height=200)
+            st.error("La IA no devolvió una lista con formato válido.")
+            st.text_area("Respuesta recibida de la IA:", response.text, height=150)
             return []
-            
     except Exception as e:
-        st.error(f"La IA se trabó generando respuestas o el formato era incorrecto. Error: {e}")
-        st.text_area("Respuesta recibida de la IA:", response.text, height=200)
+        st.error(f"La IA se trabó generando respuestas. Error: {e}")
+        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.3")
+st.title("🧉 Copiloto de Comunidad v5.2")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -179,13 +172,15 @@ else:
                 del st.session_state[key]
         st.rerun()
 
+    # --- LÓGICA CORREGIDA: Obtenemos los videos UNA SOLA VEZ al inicio ---
+    if 'videos' not in st.session_state:
+        with st.spinner("Cargando videos de tu canal..."):
+            st.session_state.videos = get_channel_videos(youtube_service)
+
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
         else:
-            if 'videos' not in st.session_state:
-                st.session_state.videos = get_channel_videos(youtube_service)
-            
             videos_with_context = [v for v in st.session_state.get('videos', []) if v["id"]["videoId"] in st.session_state.get('scripts', {})]
             if not videos_with_context:
                 st.warning("No hay videos con guion cargado. Subí al menos uno para empezar.")
@@ -252,10 +247,7 @@ else:
     st.divider()
     
     with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
-        if 'videos' not in st.session_state:
-            st.session_state.videos = get_channel_videos(youtube_service)
-        
-        if not st.session_state.videos:
+        if not st.session_state.get('videos'):
             st.warning("No se encontraron videos en tu canal.")
         else:
             if 'scripts' not in st.session_state: st.session_state.scripts = {}
@@ -266,7 +258,8 @@ else:
                 with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                 with col2:
                     st.subheader(title)
-                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md", "docx"], key=video_id)
+                    # --- CORRECCIÓN DEL BUG DE .DOCX ---
+                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=video_id)
                     if uploaded_file:
                         if uploaded_file.name.endswith('.docx'):
                             try:
