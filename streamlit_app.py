@@ -11,7 +11,7 @@ import ast # Importamos la librería para evaluación segura de literales de Pyt
 # --- Configuración de la Página ---
 st.set_page_config(
     page_title="Copiloto de Comunidad de YouTube",
-    page_icon="🧠", # <-- ¡AQUÍ ESTÁ EL CAMBIO!
+    page_icon="🧉",
     layout="wide"
 )
 
@@ -124,7 +124,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
     """
     try:
         response = model.generate_content(prompt)
-        # --- CORRECCIÓN DEL BUG v4.3 ---
+        # --- CORRECCIÓN DEL BUG ---
         # Usamos una expresión regular para encontrar el bloque que parece una lista de Python
         match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if match:
@@ -142,27 +142,34 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v4.4")
+st.title("🧉 Copiloto de Comunidad v4.2")
 
-credentials = authenticate()
+# Lógica de Autenticación
+if 'credentials' not in st.session_state:
+    authenticate()
+else:
+    # --- Si está autenticado, mostramos la app principal ---
+    credentials = st.session_state.credentials
+    youtube_service = get_youtube_service(credentials)
+    gemini_api_key = st.secrets.get("gemini_api_key")
 
-if credentials:
+    # Barra Lateral
     st.sidebar.success("Conectado a YouTube")
     if st.sidebar.button("Cerrar Sesión"):
-        del st.session_state.credentials
+        keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
+        for key in keys_to_delete:
+            if key in st.session_state:
+                del st.session_state[key]
         st.rerun()
 
-    gemini_api_key = st.secrets.get("gemini_api_key")
-    youtube_service = get_youtube_service(credentials)
-
-    if 'videos' not in st.session_state:
-        st.session_state.videos = get_channel_videos(youtube_service)
-
-    # --- Botón de Acción Principal (Ahora arriba) ---
+    # Botón de Acción Principal (Ahora arriba)
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
         else:
+            if 'videos' not in st.session_state:
+                st.session_state.videos = get_channel_videos(youtube_service)
+            
             videos_with_context = [v for v in st.session_state.get('videos', []) if v["id"]["videoId"] in st.session_state.get('scripts', {})]
             if not videos_with_context:
                 st.warning("No hay videos con guion cargado. Subí al menos uno para empezar.")
@@ -192,17 +199,19 @@ if credentials:
                     with st.spinner("La IA está preparando los borradores con onda..."):
                         for video_id, comments_data in comments_by_video.items():
                             script = st.session_state.scripts.get(video_id, "")
-                            # Creamos un diccionario para mapear el ID de la IA al índice original
                             id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
                             drafts_list = get_ai_bulk_draft_responses(gemini_api_key, script, comments_data)
                             
                             for draft in drafts_list:
                                 original_index = id_to_index_map.get(draft['id'])
-                                if original_index is not None:
+                                if original_index is not None and original_index < len(st.session_state.unanswered_comments):
                                     st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
     
     # --- Dashboard de Videos y Contexto ---
     st.header("🎬 Tus Videos y Contextos")
+    if 'videos' not in st.session_state:
+        st.session_state.videos = get_channel_videos(youtube_service)
+    
     if not st.session_state.videos:
         st.warning("No se encontraron videos en tu canal.")
     else:
@@ -229,7 +238,6 @@ if credentials:
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         
-        # Usamos una copia de la lista para poder eliminar elementos de forma segura mientras iteramos
         for i, item in enumerate(list(st.session_state.unanswered_comments)):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
