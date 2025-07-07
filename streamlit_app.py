@@ -5,12 +5,13 @@ from googleapiclient.discovery import build
 import json
 import pandas as pd
 import google.generativeai as genai
-import re # Importamos la librería para expresiones regulares
+import re
+import ast # Importamos la librería para evaluación segura de literales de Python
 
 # --- Configuración de la Página ---
 st.set_page_config(
     page_title="Copiloto de Comunidad de YouTube",
-    page_icon="🧉",
+    page_icon="🧠", # <-- ¡AQUÍ ESTÁ EL CAMBIO!
     layout="wide"
 )
 
@@ -116,27 +117,23 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
     Ejemplo de formato de salida:
     ```json
     [
-      {{
-        "id": 1,
-        "respuesta": "Gracias por la buena onda, ¡un abrazo!"
-      }},
-      {{
-        "id": 2,
-        "respuesta": "Buena pregunta. En el video explico que..."
-      }}
+      {{"id": 1, "respuesta": "Gracias por la buena onda, ¡un abrazo!"}},
+      {{"id": 2, "respuesta": "Buena pregunta. En el video explico que..."}}
     ]
     ```
     """
     try:
         response = model.generate_content(prompt)
-        # --- CORRECCIÓN DEL BUG ---
-        # Usamos una expresión regular para extraer de forma robusta solo el bloque JSON
+        # --- CORRECCIÓN DEL BUG v4.3 ---
+        # Usamos una expresión regular para encontrar el bloque que parece una lista de Python
         match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if match:
-            json_str = match.group(0)
-            return json.loads(json_str)
+            # Extraemos el texto que parece una lista
+            list_str = match.group(0)
+            # Usamos ast.literal_eval para convertir de forma segura el string a una lista de Python
+            return ast.literal_eval(list_str)
         else:
-            st.error("La IA no devolvió un JSON con formato válido.")
+            st.error("La IA no devolvió una lista con formato válido.")
             st.text_area("Respuesta recibida de la IA:", response.text, height=150)
             return []
     except Exception as e:
@@ -145,7 +142,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data):
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v4.2")
+st.title("🧉 Copiloto de Comunidad v4.4")
 
 credentials = authenticate()
 
@@ -181,35 +178,28 @@ if credentials:
                     st.success("¡Capo! No tenés comentarios sin responder. Andá a tomar unos mates.")
                 else:
                     comments_by_video = {}
-                    for item in st.session_state.unanswered_comments:
+                    for i, item in enumerate(st.session_state.unanswered_comments):
                         video_id = item['video']['id']['videoId']
                         if video_id not in comments_by_video:
                             comments_by_video[video_id] = []
                         
-                        comment_data = { "text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'] }
+                        comment_data = {
+                            "text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'],
+                            "original_index": i
+                        }
                         comments_by_video[video_id].append(comment_data)
 
                     with st.spinner("La IA está preparando los borradores con onda..."):
-                        all_drafts = {}
                         for video_id, comments_data in comments_by_video.items():
                             script = st.session_state.scripts.get(video_id, "")
+                            # Creamos un diccionario para mapear el ID de la IA al índice original
+                            id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
                             drafts_list = get_ai_bulk_draft_responses(gemini_api_key, script, comments_data)
-                            all_drafts[video_id] = drafts_list
-                        
-                        for item in st.session_state.unanswered_comments:
-                            video_id = item['video']['id']['videoId']
-                            comment_text = item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay']
-                            # Buscamos su borrador correspondiente
-                            if video_id in all_drafts:
-                                # Esto es complejo, asumimos que el orden se mantiene por ahora.
-                                # Una mejor implementación usaría IDs únicos para cada comentario.
-                                # Por simplicidad, esta versión re-asocia por texto, puede fallar con comentarios duplicados.
-                                original_text_list = [c['text'] for c in comments_by_video[video_id]]
-                                try:
-                                    idx = original_text_list.index(comment_text)
-                                    item['draft'] = all_drafts[video_id][idx]['respuesta']
-                                except (ValueError, IndexError):
-                                    item['draft'] = "Error al asociar borrador."
+                            
+                            for draft in drafts_list:
+                                original_index = id_to_index_map.get(draft['id'])
+                                if original_index is not None:
+                                    st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
     
     # --- Dashboard de Videos y Contexto ---
     st.header("🎬 Tus Videos y Contextos")
@@ -239,7 +229,8 @@ if credentials:
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         
-        for i, item in enumerate(st.session_state.unanswered_comments):
+        # Usamos una copia de la lista para poder eliminar elementos de forma segura mientras iteramos
+        for i, item in enumerate(list(st.session_state.unanswered_comments)):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
             
@@ -256,12 +247,12 @@ if credentials:
                 b_col1, b_col2, b_col3, b_col4 = st.columns([2, 1, 1, 5])
                 if b_col1.button("✅ Publicar Respuesta", key=f"pub_{i}", type="primary"):
                     post_youtube_reply(youtube_service, comment_thread['id'], edited_draft)
-                    st.session_state.unanswered_comments.pop(i)
+                    st.session_state.unanswered_comments.remove(item)
                     st.rerun()
                 
                 if b_col2.button("👍 Like", key=f"like_{i}"):
                     like_youtube_comment(youtube_service, comment_thread['snippet']['topLevelComment']['id'])
 
                 if b_col3.button("🗑️ Descartar", key=f"del_{i}"):
-                    st.session_state.unanswered_comments.pop(i)
+                    st.session_state.unanswered_comments.remove(item)
                     st.rerun()
