@@ -22,8 +22,11 @@ st.set_page_config(
 @st.cache_resource
 def get_db_connection():
     try:
-        creds_json = json.loads(st.secrets["firebase_credentials"])
-        db = firestore.Client.from_service_account_info(creds_json)
+        creds_json_str = st.secrets["firebase_credentials"]
+        # Reemplazamos los saltos de línea escapados por saltos de línea reales
+        creds_json_str = creds_json_str.replace('\\n', '\n')
+        creds_info = json.loads(creds_json_str)
+        db = firestore.Client.from_service_account_info(creds_info)
         # Hacemos una pequeña prueba para ver si la conexión es real
         db.collection('test').document('test').get()
         return db
@@ -187,7 +190,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.1")
+st.title("🧉 Copiloto de Comunidad v6.2")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -199,8 +202,9 @@ else:
 
     if db:
         user_id = credentials.id_token['sub']
-
         st.sidebar.success(f"Conectado como: {credentials.id_token['email']}")
+        st.sidebar.code(f"User ID: {user_id}") # Mostramos el User ID para depuración
+        
         if st.sidebar.button("Cerrar Sesión"):
             keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
             for key in keys_to_delete:
@@ -312,9 +316,9 @@ else:
                                 full_text = uploaded_file.getvalue().decode("utf-8")
                             
                             if full_text:
-                                if save_script_to_db(db, user_id, video_id, full_text):
-                                    st.session_state.scripts[video_id] = full_text
-                                    st.rerun()
+                                save_script_to_db(db, user_id, video_id, full_text)
+                                st.session_state.scripts[video_id] = full_text
+                                st.rerun()
 
                         elif video_id in st.session_state.scripts:
                             st.success("🟢 Guion cargado desde la base de datos.")
