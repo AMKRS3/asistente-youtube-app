@@ -97,12 +97,8 @@ def process_script(script_text):
     """
     Extrae instrucciones especiales (entre **) y limpia el guion.
     """
-    # Busca todo el texto que esté entre **...**
     special_instructions = re.findall(r'\*\*(.*?)\*\*', script_text, re.DOTALL)
-    
-    # Elimina las instrucciones especiales del texto del guion
     clean_script = re.sub(r'\*\*(.*?)\*\*', '', script_text)
-    
     return "\n".join(special_instructions), clean_script
 
 # --- Función de IA (Ahora con Instrucciones Especiales) ---
@@ -112,7 +108,6 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
     
     formatted_comments = "\n".join([f"{i+1}. \"{data['text']}\"" for i, data in enumerate(comments_data)])
 
-    # Construimos la sección de instrucciones especiales solo si existe
     instructions_prompt_part = ""
     if special_instructions:
         instructions_prompt_part = f"""
@@ -163,7 +158,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.0")
+st.title("🧉 Copiloto de Comunidad v5.1")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -181,6 +176,7 @@ else:
         st.rerun()
 
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
+        # ... (código sin cambios) ...
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
         else:
@@ -222,14 +218,12 @@ else:
                                 if original_index is not None and original_index < len(st.session_state.unanswered_comments):
                                     st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
     
-    # --- Bandeja de Entrada Inteligente ---
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
-        
         for i, item in enumerate(list(st.session_state.unanswered_comments)):
+            # ... (código de la bandeja sin cambios) ...
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
-            
             with st.container(border=True):
                 col1, col2 = st.columns([1, 10])
                 with col1: st.image(comment['authorProfileImageUrl'])
@@ -255,7 +249,6 @@ else:
 
     st.divider()
     
-    # --- Dashboard de Videos y Contexto ---
     with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
         if 'videos' not in st.session_state:
             st.session_state.videos = get_channel_videos(youtube_service)
@@ -271,18 +264,26 @@ else:
                 with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                 with col2:
                     st.subheader(title)
-                    # Aceptamos .docx ahora
-                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md", "docx"], key=video_id)
+                    # --- CORRECCIÓN DEL BUG DE .DOCX ---
+                    # Eliminamos la restricción de tipo para máxima compatibilidad
+                    uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=None, key=video_id)
                     if uploaded_file:
-                        if uploaded_file.name.endswith('.docx'):
-                            doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
-                            full_text = "\n".join([para.text for para in doc.paragraphs])
-                            st.session_state.scripts[video_id] = full_text
-                        else:
+                        file_name = uploaded_file.name
+                        if file_name.endswith('.docx'):
+                            try:
+                                doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
+                                full_text = "\n".join([para.text for para in doc.paragraphs])
+                                st.session_state.scripts[video_id] = full_text
+                                st.success(f"Guion .docx para '{title[:30]}...' cargado.")
+                            except Exception as e:
+                                st.error(f"Error al leer el archivo .docx: {e}")
+                        elif file_name.endswith('.txt') or file_name.endswith('.md'):
                             st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
-                        st.success(f"Guion para '{title[:30]}...' cargado.")
+                            st.success(f"Guion de texto para '{title[:30]}...' cargado.")
+                        else:
+                            st.warning("Formato de archivo no soportado. Por favor, sube .txt, .md o .docx.")
+                        
                     elif video_id in st.session_state.scripts:
                         st.success("🟢 Guion cargado.")
                     else:
                         st.error("🔴 Falta guion.")
-
