@@ -10,7 +10,7 @@ import ast
 import io
 import docx
 from google.cloud import firestore
-import base64 # Importamos la librería para Base64
+import base64
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -19,18 +19,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Funciones de Conexión a la Base de Datos (Lógica Actualizada) ---
+# --- Funciones de Conexión a la Base de Datos ---
 @st.cache_resource
 def get_db_connection():
-    """Establece conexión con Firestore usando credenciales codificadas en Base64."""
     try:
-        # Leemos el secreto codificado en Base64
         creds_b64 = st.secrets["firebase_credentials_b64"]
-        # Decodificamos la cadena Base64 para obtener el JSON original
         creds_json_str = base64.b64decode(creds_b64).decode("utf-8")
-        # Ahora sí, cargamos el JSON limpio
         creds_info = json.loads(creds_json_str)
-        
         db = firestore.Client.from_service_account_info(creds_info)
         return db
     except Exception as e:
@@ -59,40 +54,42 @@ def load_scripts_from_db(db, user_id):
         st.warning(f"No se pudieron cargar los guiones guardados: {e}")
     return scripts
 
-# --- Funciones de Autenticación (Estables) ---
+# --- Funciones de Autenticación y API ---
 def initialize_flow():
     if 'google_credentials' not in st.secrets or 'APP_URL' not in st.secrets:
         st.error("Error de configuración: Faltan los secretos 'google_credentials' o 'APP_URL'.")
         return None
     client_config = json.loads(st.secrets["google_credentials"])
     redirect_uri = st.secrets["APP_URL"]
-    
-    # --- CORRECCIÓN IMPORTANTE: Añadimos los permisos de OpenID ---
-    # Esto le pide a Google el "carnet de identidad" del usuario (id_token)
-    # además del permiso para gestionar YouTube.
     scopes = [
         'https://www.googleapis.com/auth/youtube.force-ssl',
         'openid',
         'https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/userinfo.profile'
     ]
-    
-    return Flow.from_client_config(
-        client_config=client_config,
-        scopes=scopes,
-        redirect_uri=redirect_uri
-    )
+    return Flow.from_client_config(client_config=client_config, scopes=scopes, redirect_uri=redirect_uri)
+
+def get_user_info(credentials):
+    """Usa las credenciales para obtener la información del usuario."""
+    try:
+        user_info_service = build('oauth2', 'v2', credentials=credentials)
+        user_info = user_info_service.userinfo().get().execute()
+        st.session_state.user_info = user_info
+        return user_info
+    except Exception as e:
+        st.error(f"Error al obtener la información del usuario: {e}")
+        return None
 
 def authenticate():
     if 'credentials' in st.session_state:
-        return st.session_state.credentials
+        return
     flow = initialize_flow()
-    if not flow: return None
+    if not flow: return
     auth_code = st.query_params.get("code")
     if not auth_code:
         auth_url, _ = flow.authorization_url(prompt='select_account')
         st.link_button("🚀 Conectar mi Canal de YouTube", auth_url, use_container_width=True, type="primary")
-        return None
+        st.stop() # Detiene la ejecución hasta que el usuario haga clic
     try:
         flow.fetch_token(code=auth_code)
         st.session_state.credentials = flow.credentials
@@ -100,9 +97,7 @@ def authenticate():
         st.rerun()
     except Exception as e:
         st.error(f"Error al obtener el token: {e}")
-    return None
 
-# --- Funciones de la API de YouTube (Con 'Like') ---
 def get_youtube_service(credentials):
     return build('youtube', 'v3', credentials=credentials)
 
@@ -204,22 +199,38 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v7.1")
+st.title("🧉 Copiloto de Comunidad v7.2")
 
 if 'credentials' not in st.session_state:
     authenticate()
 else:
     credentials = st.session_state.credentials
+    
+    # --- LÓGICA DE OBTENCIÓN DE INFO DE USUARIO MEJORADA ---
+    if 'user_info' not in st.session_state:
+        with st.spinner("Verificando identidad..."):
+            user_info = get_user_info(credentials)
+            if not user_info:
+                st.error("No se pudo verificar la información del usuario. Intenta cerrar sesión y volver a conectar.")
+                st.stop()
+    else:
+        user_info = st.session_state.user_info
+
+    user_id = user_info.get('id')
+    user_email = user_info.get('email')
+
+    if not user_id:
+        st.error("No se pudo obtener un ID de usuario único. La aplicación no puede continuar.")
+        st.stop()
+
     youtube_service = get_youtube_service(credentials)
     gemini_api_key = st.secrets.get("gemini_api_key")
     db = get_db_connection()
 
     if db:
-        user_id = credentials.id_token['sub']
-
-        st.sidebar.success(f"Conectado como: {credentials.id_token['email']}")
+        st.sidebar.success(f"Conectado como: {user_email}")
         if st.sidebar.button("Cerrar Sesión"):
-            keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
+            keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments', 'user_info']
             for key in keys_to_delete:
                 if key in st.session_state:
                     del st.session_state[key]
@@ -338,3 +349,4 @@ else:
                             st.success("🟢 Guion cargado desde la base de datos.")
                         else:
                             st.error("🔴 Falta guion.")
+
