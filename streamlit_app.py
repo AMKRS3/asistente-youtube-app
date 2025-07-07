@@ -9,6 +9,7 @@ import re
 import ast
 import io
 import docx
+import time
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -114,10 +115,8 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
-    # --- PERSONALIDAD MEJORADA Y CORREGIDA ---
     prompt = f"""
     Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un Argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma corta, inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). Prioriza dar la respuesta más corta y concisa que la elocuencia permita. No usas formalidades y agradeces siempre los mensajes positivos, con los negativos, a veces no siempre, eres irónico y le agradeces que con su msj ayuda a darle mas visibilidad al video.
-
     {instructions_prompt_part}
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -148,13 +147,12 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
             st.text_area("Respuesta recibida de la IA:", response.text, height=150)
             return []
     except Exception as e:
-        # --- CORRECCIÓN DEL BUG UNBOUNDLOCALERROR ---
-        # Ahora solo mostramos el error 'e', que sí está definido.
         st.error(f"La IA se trabó generando respuestas. Error: {e}")
+        # No intentamos acceder a response.text aquí para evitar el UnboundLocalError
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.6")
+st.title("🧉 Copiloto de Comunidad v5.9")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -193,27 +191,43 @@ else:
                 if not st.session_state.unanswered_comments:
                     st.success("¡Capo! No tenés comentarios sin responder. Andá a tomar unos mates.")
                 else:
-                    comments_by_video = {}
+                    # --- LÓGICA DE PROCESAMIENTO POR LOTES MEJORADA ---
+                    all_comments_to_process = []
                     for i, item in enumerate(st.session_state.unanswered_comments):
                         video_id = item['video']['id']['videoId']
-                        if video_id not in comments_by_video:
-                            comments_by_video[video_id] = []
-                        comment_data = {"text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'], "original_index": i}
-                        comments_by_video[video_id].append(comment_data)
+                        comment_text = item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay']
+                        all_comments_to_process.append({
+                            "video_id": video_id,
+                            "text": comment_text,
+                            "original_index": i
+                        })
+                    
+                    # Dividimos en paquetes de 15 para no saturar la API
+                    chunk_size = 15
+                    comment_chunks = [all_comments_to_process[i:i + chunk_size] for i in range(0, len(all_comments_to_process), chunk_size)]
+                    
+                    progress_bar = st.progress(0, text="Procesando lotes de comentarios con la IA...")
+                    
+                    for i, chunk in enumerate(comment_chunks):
+                        # Usamos el contexto del primer video del lote (una simplificación razonable)
+                        video_id_for_chunk = chunk[0]['video_id']
+                        script = st.session_state.scripts.get(video_id_for_chunk, "")
+                        special_instructions, clean_script = process_script(script)
+                        
+                        drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, chunk, special_instructions)
+                        
+                        for draft in drafts_list:
+                            # El 'id' de la IA corresponde al índice dentro del chunk (1-based)
+                            chunk_index = draft['id'] - 1
+                            if chunk_index < len(chunk):
+                                original_index = chunk[chunk_index]['original_index']
+                                st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
+                        
+                        progress_bar.progress((i + 1) / len(comment_chunks), text=f"Lote {i+1}/{len(comment_chunks)} procesado...")
+                        time.sleep(3) # Pausa de 3 segundos para no exceder límites
+                    
+                    progress_bar.empty()
 
-                    with st.spinner("La IA está preparando los borradores con onda..."):
-                        for video_id, comments_data in comments_by_video.items():
-                            full_script_text = st.session_state.scripts.get(video_id, "")
-                            special_instructions, clean_script = process_script(full_script_text)
-                            
-                            id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
-                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, comments_data, special_instructions)
-                            
-                            for draft in drafts_list:
-                                original_index = id_to_index_map.get(draft['id'])
-                                if original_index is not None and original_index < len(st.session_state.unanswered_comments):
-                                    st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
-    
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         
@@ -234,7 +248,7 @@ else:
 
                 b_col1, b_col2, b_col3, b_col4 = st.columns([2, 1, 1, 5])
                 if b_col1.button("✅ Publicar Respuesta", key=f"pub_{comment_id}", type="primary"):
-                    success = post_youtube_reply(youtube_service, comment_id, edited_draft)
+                    success = post_youtube_reply(youtube_service, comment_thread['id'], edited_draft)
                     if success:
                         st.session_state.unanswered_comments.remove(item)
                         st.rerun()
