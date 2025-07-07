@@ -37,8 +37,7 @@ def authenticate():
     if not flow: return None
     auth_code = st.query_params.get("code")
     if not auth_code:
-        # --- CAMBIO IMPORTANTE: Forzamos el selector de cuentas ---
-        auth_url, _ = flow.authorization_url(prompt='select_account')
+        auth_url, _ = flow.authorization_url(prompt='consent')
         st.link_button("🚀 Conectar mi Canal de YouTube", auth_url, use_container_width=True, type="primary")
         return None
     try:
@@ -115,8 +114,9 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
+    # --- ESTA ES LA PERSONALIDAD ORIGINAL QUE FUNCIONABA ---
     prompt = f"""
-    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). No usas formalidades.
+    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, breve, con un toque de acidez e irreverencia, pero siempre ingenioso. No usas formalidades.
     {instructions_prompt_part}
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -152,7 +152,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.7")
+st.title("🧉 Copiloto de Comunidad v5.5 (Estable)")
 
 if 'credentials' not in st.session_state:
     authenticate()
