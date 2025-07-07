@@ -155,7 +155,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.2")
+st.title("🧉 Copiloto de Comunidad v5.3")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -177,10 +177,15 @@ else:
         with st.spinner("Cargando videos de tu canal..."):
             st.session_state.videos = get_channel_videos(youtube_service)
 
+    # --- Botón de Acción Principal (Ahora arriba) ---
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
             st.error("Che, poné la 'gemini_api_key' en los Secrets para que esto funcione.")
         else:
+            # Re-verificamos la lista de videos por si acaso
+            if 'videos' not in st.session_state:
+                st.session_state.videos = get_channel_videos(youtube_service)
+
             videos_with_context = [v for v in st.session_state.get('videos', []) if v["id"]["videoId"] in st.session_state.get('scripts', {})]
             if not videos_with_context:
                 st.warning("No hay videos con guion cargado. Subí al menos uno para empezar.")
@@ -216,6 +221,7 @@ else:
                                 if original_index is not None and original_index < len(st.session_state.unanswered_comments):
                                     st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
     
+    # --- Bandeja de Entrada Inteligente ---
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
         for i, item in enumerate(list(st.session_state.unanswered_comments)):
@@ -246,6 +252,7 @@ else:
 
     st.divider()
     
+    # --- Dashboard de Videos y Contexto ---
     with st.expander("🎬 Ver y Gestionar Tus Videos y Contextos"):
         if not st.session_state.get('videos'):
             st.warning("No se encontraron videos en tu canal.")
@@ -258,7 +265,6 @@ else:
                 with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                 with col2:
                     st.subheader(title)
-                    # --- CORRECCIÓN DEL BUG DE .DOCX ---
                     uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=video_id)
                     if uploaded_file:
                         if uploaded_file.name.endswith('.docx'):
@@ -272,8 +278,20 @@ else:
                         else: 
                             st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
                             st.success(f"Guion de texto para '{title[:30]}...' cargado.")
+                        st.rerun() # Forzamos un rerun para que el estado se actualice en toda la app
                         
                     elif video_id in st.session_state.scripts:
                         st.success("🟢 Guion cargado.")
                     else:
                         st.error("🔴 Falta guion.")
+
+    # --- NUEVA SECCIÓN DE DEBUG ---
+    with st.expander("🐞 Estado de la Memoria (Debug)"):
+        st.write("Esta sección te ayuda a ver qué guiones tiene la app en memoria en este momento.")
+        if 'scripts' in st.session_state and st.session_state.scripts:
+            st.write("Guiones cargados en esta sesión:")
+            # Mostramos los IDs de los videos que tienen un guion cargado
+            for video_id, script_content in st.session_state.scripts.items():
+                st.write(f"- Video ID: `{video_id}` (Guion de {len(script_content)} caracteres)")
+        else:
+            st.write("Aún no se han cargado guiones en esta sesión.")
