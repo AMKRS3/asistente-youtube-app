@@ -7,8 +7,6 @@ import pandas as pd
 import google.generativeai as genai
 import re
 import ast
-import io
-import docx # Librería para leer archivos .docx
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -92,16 +90,7 @@ def like_youtube_comment(youtube_service, comment_id):
     except Exception as e:
         st.error(f"Error al dar like: {e}")
 
-# --- NUEVA FUNCIÓN para procesar guiones ---
-def process_script(script_text):
-    """
-    Extrae instrucciones especiales (entre **) y limpia el guion.
-    """
-    special_instructions = re.findall(r'\*\*(.*?)\*\*', script_text, re.DOTALL)
-    clean_script = re.sub(r'\*\*(.*?)\*\*', '', script_text)
-    return "\n".join(special_instructions), clean_script
-
-# --- Función de IA (Ahora con Instrucciones Especiales) ---
+# --- Función de IA (Con Personalidad y Procesamiento por Lotes) ---
 def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_instructions=""):
     genai.configure(api_key=gemini_api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -144,21 +133,36 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
     """
     try:
         response = model.generate_content(prompt)
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        
+        # --- CORRECCIÓN DEFINITIVA v5.3 ---
+        # Lógica robusta para encontrar y extraer la lista de la respuesta de la IA.
+        text_response = response.text
+        
+        # Intentamos varios patrones para encontrar la lista
+        match = re.search(r'```json\s*(\[[\s\S]*?\])\s*```', text_response)
+        if not match:
+            match = re.search(r'```python\s*(\[[\s\S]*?\])\s*```', text_response)
+        if not match:
+            match = re.search(r'=\s*(\[[\s\S]*?\])', text_response)
+        if not match:
+            match = re.search(r'(\[[\s\S]*?\])', text_response)
+
         if match:
-            list_str = match.group(0)
+            list_str = match.group(1) if match.groups() else match.group(0)
+            # Usamos ast.literal_eval para convertir de forma segura el string a una lista de Python
             return ast.literal_eval(list_str)
         else:
-            st.error("La IA no devolvió una lista con formato válido.")
-            st.text_area("Respuesta recibida de la IA:", response.text, height=150)
+            st.error("La IA no devolvió una lista con formato válido después de varios intentos de limpieza.")
+            st.text_area("Respuesta recibida de la IA:", text_response, height=200)
             return []
+            
     except Exception as e:
-        st.error(f"La IA se trabó generando respuestas. Error: {e}")
-        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
+        st.error(f"La IA se trabó generando respuestas o el formato era incorrecto. Error: {e}")
+        st.text_area("Respuesta recibida de la IA:", response.text, height=200)
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.2")
+st.title("🧉 Copiloto de Comunidad v5.3")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -262,7 +266,6 @@ else:
                 with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                 with col2:
                     st.subheader(title)
-                    # Aceptamos .docx ahora
                     uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=["txt", "md", "docx"], key=video_id)
                     if uploaded_file:
                         if uploaded_file.name.endswith('.docx'):
@@ -273,7 +276,7 @@ else:
                                 st.success(f"Guion .docx para '{title[:30]}...' cargado.")
                             except Exception as e:
                                 st.error(f"Error al leer el archivo .docx: {e}")
-                        else: # Asumimos txt o md
+                        else: 
                             st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
                             st.success(f"Guion de texto para '{title[:30]}...' cargado.")
                         
