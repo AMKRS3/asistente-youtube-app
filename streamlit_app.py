@@ -9,6 +9,7 @@ import re
 import ast
 import io
 import docx
+from google.cloud import firestore # Importamos Firestore
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -16,6 +17,31 @@ st.set_page_config(
     page_icon="🧉",
     layout="wide"
 )
+
+# --- Funciones de Conexión a la Base de Datos ---
+@st.cache_resource
+def get_db_connection():
+    """Establece conexión con la base de datos Firestore."""
+    try:
+        creds_json = json.loads(st.secrets["firebase_credentials"])
+        db = firestore.Client.from_service_account_info(creds_json)
+        return db
+    except Exception as e:
+        st.error(f"No se pudo conectar a la base de datos: {e}")
+        return None
+
+def save_script_to_db(db, user_id, video_id, script_content):
+    """Guarda o actualiza un guion en la base de datos."""
+    doc_ref = db.collection('users').document(user_id).collection('scripts').document(video_id)
+    doc_ref.set({'script': script_content})
+
+def load_scripts_from_db(db, user_id):
+    """Carga todos los guiones de un usuario desde la base de datos."""
+    scripts = {}
+    docs = db.collection('users').document(user_id).collection('scripts').stream()
+    for doc in docs:
+        scripts[doc.id] = doc.to_dict().get('script', '')
+    return scripts
 
 # --- Funciones de Autenticación (Estables) ---
 def initialize_flow():
@@ -37,7 +63,7 @@ def authenticate():
     if not flow: return None
     auth_code = st.query_params.get("code")
     if not auth_code:
-        auth_url, _ = flow.authorization_url(prompt='consent')
+        auth_url, _ = flow.authorization_url(prompt='select_account')
         st.link_button("🚀 Conectar mi Canal de YouTube", auth_url, use_container_width=True, type="primary")
         return None
     try:
@@ -114,10 +140,8 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
-    # --- AJUSTE DE PERSONALIDAD ---
     prompt = f"""
-    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). Prioriza dar la respuesta más corta y concisa que la elocuencia permita. No usas formalidades y agradeces siempre los mensajes positivos, tambien a los negativos pero con una referencia a que su msj de igual manera ayuda con el algoritmo a darle mas visibilidad al video.
-
+    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, ingenioso y con un toque de acidez e ironía. Respondes de forma inteligente y aguda, pero siempre manteniendo el respeto y sin usar insultos ni groserías (como 'boludo', 'pelotudo', 'gil', etc.). Prioriza dar la respuesta más corta y concisa que la elocuencia permita. No usas formalidades y agradeces siempre los mensaje positivos, tambien a los negativos pero con una referencia a que su msj de igual manera ayuda con el algoritmo a darle mas visibilidad al video.
     {instructions_prompt_part}
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -153,7 +177,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v5.7 (Estable)")
+st.title("🧉 Copiloto de Comunidad v6.0")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -161,8 +185,12 @@ else:
     credentials = st.session_state.credentials
     youtube_service = get_youtube_service(credentials)
     gemini_api_key = st.secrets.get("gemini_api_key")
+    db = get_db_connection()
 
-    st.sidebar.success("Conectado a YouTube")
+    # Usamos el ID de usuario de Google como identificador único para la base de datos
+    user_id = credentials.id_token['sub']
+
+    st.sidebar.success(f"Conectado como: {credentials.id_token['email']}")
     if st.sidebar.button("Cerrar Sesión"):
         keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
         for key in keys_to_delete:
@@ -170,9 +198,13 @@ else:
                 del st.session_state[key]
         st.rerun()
 
+    # Cargamos los videos y los guiones guardados al inicio
     if 'videos' not in st.session_state:
         with st.spinner("Cargando videos de tu canal..."):
             st.session_state.videos = get_channel_videos(youtube_service)
+    if 'scripts' not in st.session_state:
+        with st.spinner("Cargando guiones desde la base de datos..."):
+            st.session_state.scripts = load_scripts_from_db(db, user_id)
 
     if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
         if not gemini_api_key:
@@ -215,7 +247,6 @@ else:
     
     if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
         st.header("📬 Bandeja de Entrada Inteligente")
-        
         for item in list(st.session_state.unanswered_comments):
             comment_thread = item['comment_thread']
             comment = comment_thread['snippet']['topLevelComment']['snippet']
@@ -265,15 +296,18 @@ else:
                             try:
                                 doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
                                 full_text = "\n".join([para.text for para in doc.paragraphs])
+                                save_script_to_db(db, user_id, video_id, full_text)
                                 st.session_state.scripts[video_id] = full_text
-                                st.success(f"Guion .docx para '{title[:30]}...' cargado.")
+                                st.success(f"Guion .docx para '{title[:30]}...' guardado en la base de datos.")
                             except Exception as e:
                                 st.error(f"Error al leer el archivo .docx: {e}")
                         else: 
-                            st.session_state.scripts[video_id] = uploaded_file.getvalue().decode("utf-8")
-                            st.success(f"Guion de texto para '{title[:30]}...' cargado.")
+                            full_text = uploaded_file.getvalue().decode("utf-8")
+                            save_script_to_db(db, user_id, video_id, full_text)
+                            st.session_state.scripts[video_id] = full_text
+                            st.success(f"Guion de texto para '{title[:30]}...' guardado en la base de datos.")
                         
                     elif video_id in st.session_state.scripts:
-                        st.success("🟢 Guion cargado.")
+                        st.success("🟢 Guion cargado desde la base de datos.")
                     else:
                         st.error("🔴 Falta guion.")
