@@ -185,7 +185,7 @@ def get_ai_draft_response(gemini_api_key, script, comment_text, special_instruct
         return "No se pudo generar el borrador."
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.2")
+st.title("🧉 Copiloto de Comunidad v6.3")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -248,15 +248,16 @@ else:
             st.header("📬 Bandeja de Entrada Inteligente")
             for i, item in enumerate(list(st.session_state.unanswered_comments)):
                 comment_thread = item['comment_thread']
-                comment = comment_thread['snippet']['topLevelComment']['snippet']
-                comment_id = comment_thread['id']
+                top_level_comment = comment_thread['snippet']['topLevelComment']
+                comment_id = top_level_comment['id']
+                comment_snippet = top_level_comment['snippet']
                 
                 with st.container(border=True):
                     col1, col2 = st.columns([1, 10])
-                    with col1: st.image(comment['authorProfileImageUrl'])
+                    with col1: st.image(comment_snippet['authorProfileImageUrl'])
                     with col2:
-                        st.write(f"**{comment['authorDisplayName']}** en *{item['video']['snippet']['title']}*:")
-                        st.info(f"_{comment['textDisplay']}_")
+                        st.write(f"**{comment_snippet['authorDisplayName']}** en *{item['video']['snippet']['title']}*:")
+                        st.info(f"_{comment_snippet['textDisplay']}_")
 
                     draft = item.get('draft', '')
                     edited_draft = st.text_area("Borrador de Respuesta:", value=draft, key=f"text_{comment_id}")
@@ -270,18 +271,18 @@ else:
                             script = st.session_state.scripts.get(video_id, "")
                             special_instructions, clean_script = process_script(script)
                             with st.spinner("La IA está pensando..."):
-                                new_draft = get_ai_draft_response(gemini_api_key, clean_script, comment['textDisplay'], special_instructions)
+                                new_draft = get_ai_draft_response(gemini_api_key, clean_script, comment_snippet['textDisplay'], special_instructions)
                                 st.session_state.unanswered_comments[i]['draft'] = new_draft
                                 st.rerun()
 
                     if b_col2.button("✅ Publicar", key=f"pub_{comment_id}", type="primary"):
-                        success = post_youtube_reply(youtube_service, comment_id, edited_draft)
+                        success = post_youtube_reply(youtube_service, comment_thread['id'], edited_draft)
                         if success:
                             st.session_state.unanswered_comments.remove(item)
                             st.rerun()
                     
                     if b_col3.button("👍", key=f"like_{comment_id}"):
-                        like_youtube_comment(youtube_service, comment['id'])
+                        like_youtube_comment(youtube_service, comment_id)
 
                     if b_col4.button("🗑️", key=f"del_{comment_id}"):
                         st.session_state.unanswered_comments.remove(item)
@@ -301,7 +302,7 @@ else:
                     with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                     with col2:
                         st.subheader(title)
-                        uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=video_id)
+                        uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=f"upload_{video_id}")
                         if uploaded_file:
                             if uploaded_file.name.endswith('.docx'):
                                 try:
@@ -316,9 +317,9 @@ else:
                             if full_text:
                                 if save_script_to_db(db, user_id, video_id, full_text):
                                     st.session_state.scripts[video_id] = full_text
-                                    # ELIMINADO: st.rerun() para evitar el bucle de recarga.
-                        
-                        if video_id in st.session_state.scripts:
+                                    st.rerun()
+
+                        elif video_id in st.session_state.scripts:
                             st.success("🟢 Guion cargado desde la base de datos.")
                         else:
                             st.error("🔴 Falta guion.")
