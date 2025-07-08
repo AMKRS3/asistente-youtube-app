@@ -140,7 +140,6 @@ def post_youtube_reply(youtube_service, parent_id, text):
 
 def like_youtube_comment(youtube_service, comment_id):
     try:
-        # La API de YouTube espera el ID del comentario, no del hilo
         youtube_service.comments().rate(id=comment_id, rating="like").execute()
         st.toast(f"👍 ¡Like enviado!")
     except Exception as e:
@@ -276,7 +275,6 @@ else:
                                 st.rerun()
 
                     if b_col2.button("✅ Publicar", key=f"pub_{comment_id}", type="primary"):
-                        # Usamos el ID del thread para responder, que es el parentId
                         success = post_youtube_reply(youtube_service, comment_thread['id'], edited_draft)
                         if success:
                             st.session_state.unanswered_comments.remove(item)
@@ -319,9 +317,9 @@ else:
                             if full_text:
                                 if save_script_to_db(db, user_id, video_id, full_text):
                                     st.session_state.scripts[video_id] = full_text
-                                    st.rerun()
-
-                        elif video_id in st.session_state.scripts:
+                                    # ELIMINADO: st.rerun() para evitar el bucle de recarga.
+                        
+                        if video_id in st.session_state.scripts:
                             st.success("🟢 Guion cargado desde la base de datos.")
                         else:
                             st.error("🔴 Falta guion.")
