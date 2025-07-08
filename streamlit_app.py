@@ -43,6 +43,17 @@ def save_script_to_db(db, user_id, video_id, script_content):
         st.error(f"Error al guardar el guion: {e}")
         return False
 
+def delete_script_from_db(db, user_id, video_id):
+    """Elimina un guion de la base de datos."""
+    try:
+        doc_ref = db.collection('users').document(user_id).collection('scripts').document(video_id)
+        doc_ref.delete()
+        st.toast("🗑️ Guion eliminado de la base de datos.")
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar el guion: {e}")
+        return False
+
 def load_scripts_from_db(db, user_id):
     scripts = {}
     try:
@@ -198,7 +209,7 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.0 (Estable)")
+st.title("🧉 Copiloto de Comunidad v6.1")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -260,39 +271,26 @@ else:
                     if not st.session_state.unanswered_comments:
                         st.success("¡Capo! No tenés comentarios sin responder. Andá a tomar unos mates.")
                     else:
-                        # --- LÓGICA DE PROCESAMIENTO POR LOTES MEJORADA ---
-                        all_comments_to_process = []
+                        comments_by_video = {}
                         for i, item in enumerate(st.session_state.unanswered_comments):
                             video_id = item['video']['id']['videoId']
-                            comment_text = item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay']
-                            all_comments_to_process.append({
-                                "video_id": video_id,
-                                "text": comment_text,
-                                "original_index": i
-                            })
-                        
-                        chunk_size = 15
-                        comment_chunks = [all_comments_to_process[i:i + chunk_size] for i in range(0, len(all_comments_to_process), chunk_size)]
-                        
-                        progress_bar = st.progress(0, text="Procesando lotes de comentarios con la IA...")
-                        
-                        for i, chunk in enumerate(comment_chunks):
-                            video_id_for_chunk = chunk[0]['video_id']
-                            script = st.session_state.scripts.get(video_id_for_chunk, "")
-                            special_instructions, clean_script = process_script(script)
-                            
-                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, chunk, special_instructions)
-                            
-                            for draft in drafts_list:
-                                chunk_index = draft['id'] - 1
-                                if chunk_index < len(chunk):
-                                    original_index = chunk[chunk_index]['original_index']
-                                    st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
-                            
-                            progress_bar.progress((i + 1) / len(comment_chunks), text=f"Lote {i+1}/{len(comment_chunks)} procesado...")
-                            time.sleep(3)
-                        
-                        progress_bar.empty()
+                            if video_id not in comments_by_video:
+                                comments_by_video[video_id] = []
+                            comment_data = {"text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'], "original_index": i}
+                            comments_by_video[video_id].append(comment_data)
+
+                        with st.spinner("La IA está preparando los borradores con onda..."):
+                            for video_id, comments_data in comments_by_video.items():
+                                full_script_text = st.session_state.scripts.get(video_id, "")
+                                special_instructions, clean_script = process_script(full_script_text)
+                                
+                                id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
+                                drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, comments_data, special_instructions)
+                                
+                                for draft in drafts_list:
+                                    original_index = id_to_index_map.get(draft['id'])
+                                    if original_index is not None and original_index < len(st.session_state.unanswered_comments):
+                                        st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
         
         if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
             st.header("📬 Bandeja de Entrada Inteligente")
@@ -335,11 +333,17 @@ else:
                 for video in st.session_state.videos:
                     video_id = video["id"]["videoId"]
                     title = video["snippet"]["title"]
-                    col1, col2 = st.columns([1, 4])
-                    with col1: st.image(video["snippet"]["thumbnails"]["medium"]["url"])
+                    col1, col2, col3 = st.columns([2, 5, 2])
+                    with col1:
+                        st.image(video["snippet"]["thumbnails"]["medium"]["url"])
                     with col2:
                         st.subheader(title)
-                        uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=video_id)
+                        if video_id in st.session_state.scripts:
+                            st.success("🟢 Guion cargado desde la base de datos.")
+                        else:
+                            st.error("🔴 Falta guion.")
+                    with col3:
+                        uploaded_file = st.file_uploader(f"Subir/Actualizar guion", type=['txt', 'md', 'docx'], key=f"upload_{video_id}")
                         if uploaded_file:
                             if uploaded_file.name.endswith('.docx'):
                                 try:
@@ -355,8 +359,9 @@ else:
                                 if save_script_to_db(db, user_id, video_id, full_text):
                                     st.session_state.scripts[video_id] = full_text
                                     st.rerun()
-
-                        elif video_id in st.session_state.scripts:
-                            st.success("🟢 Guion cargado desde la base de datos.")
-                        else:
-                            st.error("🔴 Falta guion.")
+                        
+                        if video_id in st.session_state.scripts:
+                            if st.button("🗑️ Eliminar Guion", key=f"delete_{video_id}"):
+                                if delete_script_from_db(db, user_id, video_id):
+                                    del st.session_state.scripts[video_id]
+                                    st.rerun()
