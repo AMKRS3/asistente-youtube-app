@@ -9,9 +9,7 @@ import re
 import ast
 import io
 import docx
-from google.cloud import firestore
-import base64
-import time
+from google.cloud import firestore # Importamos Firestore
 
 # --- Configuración de la Página ---
 st.set_page_config(
@@ -23,73 +21,60 @@ st.set_page_config(
 # --- Funciones de Conexión a la Base de Datos ---
 @st.cache_resource
 def get_db_connection():
+    """Establece conexión con la base de datos Firestore."""
     try:
-        creds_b64 = st.secrets["firebase_credentials_b64"]
-        creds_json_str = base64.b64decode(creds_b64).decode("utf-8")
-        creds_info = json.loads(creds_json_str)
-        db = firestore.Client.from_service_account_info(creds_info)
+        # Corregimos el formato de la clave privada para que sea un JSON válido
+        key_dict = json.loads(st.secrets["firebase_credentials"])
+        db = firestore.Client.from_service_account_info(key_dict)
         return db
     except Exception as e:
-        st.error(f"Error Crítico al conectar a la Base de Datos: {e}")
+        st.error(f"No se pudo conectar a la base de datos: {e}")
         return None
 
 def save_script_to_db(db, user_id, video_id, script_content):
+    """Guarda o actualiza un guion en la base de datos."""
     try:
         doc_ref = db.collection('users').document(user_id).collection('scripts').document(video_id)
         doc_ref.set({'script': script_content})
-        st.toast("✅ Guion guardado en la base de datos.")
         return True
     except Exception as e:
-        st.error(f"Error al guardar el guion: {e}")
+        st.error(f"Error al guardar el guion en la base de datos: {e}")
         return False
 
 def load_scripts_from_db(db, user_id):
+    """Carga todos los guiones de un usuario desde la base de datos."""
     scripts = {}
     try:
         docs = db.collection('users').document(user_id).collection('scripts').stream()
         for doc in docs:
             scripts[doc.id] = doc.to_dict().get('script', '')
-        if scripts:
-            st.toast(f"✅ {len(scripts)} guion(es) cargado(s) desde la base de datos.")
     except Exception as e:
         st.warning(f"No se pudieron cargar los guiones guardados: {e}")
     return scripts
 
-# --- Funciones de Autenticación y API ---
+# --- Funciones de Autenticación (Estables) ---
 def initialize_flow():
     if 'google_credentials' not in st.secrets or 'APP_URL' not in st.secrets:
         st.error("Error de configuración: Faltan los secretos 'google_credentials' o 'APP_URL'.")
         return None
     client_config = json.loads(st.secrets["google_credentials"])
     redirect_uri = st.secrets["APP_URL"]
-    scopes = [
-        'https://www.googleapis.com/auth/youtube.force-ssl',
-        'openid',
-        'https://www.googleapis.com/auth/userinfo.email',
-        'https://www.googleapis.com/auth/userinfo.profile'
-    ]
-    return Flow.from_client_config(client_config=client_config, scopes=scopes, redirect_uri=redirect_uri)
-
-def get_user_info(credentials):
-    try:
-        user_info_service = build('oauth2', 'v2', credentials=credentials)
-        user_info = user_info_service.userinfo().get().execute()
-        st.session_state.user_info = user_info
-        return user_info
-    except Exception as e:
-        st.error(f"Error al obtener la información del usuario: {e}")
-        return None
+    return Flow.from_client_config(
+        client_config=client_config,
+        scopes=['https://www.googleapis.com/auth/youtube.force-ssl'],
+        redirect_uri=redirect_uri
+    )
 
 def authenticate():
     if 'credentials' in st.session_state:
-        return
+        return st.session_state.credentials
     flow = initialize_flow()
-    if not flow: return
+    if not flow: return None
     auth_code = st.query_params.get("code")
     if not auth_code:
         auth_url, _ = flow.authorization_url(prompt='select_account')
         st.link_button("🚀 Conectar mi Canal de YouTube", auth_url, use_container_width=True, type="primary")
-        st.stop()
+        return None
     try:
         flow.fetch_token(code=auth_code)
         st.session_state.credentials = flow.credentials
@@ -97,7 +82,9 @@ def authenticate():
         st.rerun()
     except Exception as e:
         st.error(f"Error al obtener el token: {e}")
+    return None
 
+# --- Funciones de la API de YouTube (Con 'Like') ---
 def get_youtube_service(credentials):
     return build('youtube', 'v3', credentials=credentials)
 
@@ -162,8 +149,21 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
         {special_instructions}
         ---
         """
+    # --- NUEVA PERSONALIDAD MEJORADA ---
     prompt = f"""
-    Sos un asistente de comunidad para un creador de contenido de YouTube. Tu personalidad es la de un argentino: directo, breve, con un toque de acidez e irreverencia, pero siempre ingenioso. No usas formalidades.
+    Sos un asistente de comunidad para un canal libertario de YouTube. Tenés una personalidad punzante, sagaz y con los pies en la tierra. Contestás comentarios con lógica filosa, ironía medida y una pizca de sarcasmo porteño. No sos sumiso, no pedís permiso, y no tenés miedo de dejar en evidencia al que comenta sin entender.
+    No caés en bardo barato ni en insultos vulgares, pero sí sabés dejar a un bocón sin argumentos y con estilo.
+    Respondés como alguien que entiende de política, de derecho, de tecnología y del juego discursivo. Cada respuesta es un jaque mate, no una caricia.
+    Tu tono es: directo, inteligente, irónico, con humor ácido y cero corrección política.
+    No escribís como robot, escribís como un humano con calle, convicciones firmes y cero tolerancia al humo.
+    Instrucciones clave del bot:
+    - Si el comentario es agresivo, devolvé con ironía o sarcasmo, dejándolo en ridículo, pero sin insultar directamente.
+    - Si el comentario está mal informado, corregilo con datos claros y una respuesta que lo haga quedar como un improvisado.
+    - Si el comentario es largo y confuso, reducilo a lo absurdo con una frase cortante y certera.
+    - Si el comentario es válido pero equivocado, reconocé lo bueno pero rematalo con lo que le falta.
+    - Si el comentario es irónico o burlón, respondé con más ingenio y un tono que sepa usar su propio recurso contra él.
+    - Si el comentario es sensato y con respeto, respondé igual de firme pero con reconocimiento.
+
     {instructions_prompt_part}
     CONTEXTO DEL VIDEO (GUION):
     ---
@@ -178,8 +178,8 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
     Ejemplo de formato de salida:
     ```json
     [
-      {{"id": 1, "respuesta": "Gracias por la buena onda, ¡un abrazo!"}},
-      {{"id": 2, "respuesta": "Buena pregunta. En el video explico que..."}}
+      {{"id": 1, "respuesta": "Claro, y vos comentás desde una dimensión paralela sin ideología. ¿Querés objetividad? Empezá por dejar de repetir slogans."}},
+      {{"id": 2, "respuesta": "Gracias por el apoyo, un abrazo."}}
     ]
     ```
     """
@@ -195,52 +195,39 @@ def get_ai_bulk_draft_responses(gemini_api_key, script, comments_data, special_i
             return []
     except Exception as e:
         st.error(f"La IA se trabó generando respuestas. Error: {e}")
+        st.text_area("Respuesta recibida de la IA:", response.text, height=150)
         return []
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.0 (Estable)")
+st.title("🧉 Copiloto de Comunidad v6.0")
 
 if 'credentials' not in st.session_state:
     authenticate()
 else:
     credentials = st.session_state.credentials
-    
-    if 'user_info' not in st.session_state:
-        with st.spinner("Verificando identidad..."):
-            user_info = get_user_info(credentials)
-            if not user_info:
-                st.error("No se pudo verificar la información del usuario. Intenta cerrar sesión y volver a conectar.")
-                st.stop()
-    else:
-        user_info = st.session_state.user_info
-
-    user_id = user_info.get('id')
-    user_email = user_info.get('email')
-
-    if not user_id:
-        st.error("No se pudo obtener un ID de usuario único. La aplicación no puede continuar.")
-        st.stop()
-
     youtube_service = get_youtube_service(credentials)
     gemini_api_key = st.secrets.get("gemini_api_key")
     db = get_db_connection()
 
     if db:
-        st.sidebar.success(f"Conectado como: {user_email}")
+        # Usamos el ID de usuario de Google como identificador único para la base de datos
+        user_id = credentials.id_token['sub']
+
+        st.sidebar.success(f"Conectado como: {credentials.id_token['email']}")
         if st.sidebar.button("Cerrar Sesión"):
-            keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments', 'user_info']
+            keys_to_delete = ['credentials', 'videos', 'scripts', 'unanswered_comments']
             for key in keys_to_delete:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
 
-        if 'scripts' not in st.session_state:
-            with st.spinner("Cargando guiones desde la base de datos..."):
-                st.session_state.scripts = load_scripts_from_db(db, user_id)
-        
+        # Cargamos los videos y los guiones guardados al inicio
         if 'videos' not in st.session_state:
             with st.spinner("Cargando videos de tu canal..."):
                 st.session_state.videos = get_channel_videos(youtube_service)
+        if 'scripts' not in st.session_state:
+            with st.spinner("Cargando guiones desde la base de datos..."):
+                st.session_state.scripts = load_scripts_from_db(db, user_id)
 
         if st.button("🔄 Buscar Comentarios Sin Respuesta", use_container_width=True, type="primary"):
             if not gemini_api_key:
@@ -260,39 +247,26 @@ else:
                     if not st.session_state.unanswered_comments:
                         st.success("¡Capo! No tenés comentarios sin responder. Andá a tomar unos mates.")
                     else:
-                        # --- LÓGICA DE PROCESAMIENTO POR LOTES MEJORADA ---
-                        all_comments_to_process = []
+                        comments_by_video = {}
                         for i, item in enumerate(st.session_state.unanswered_comments):
                             video_id = item['video']['id']['videoId']
-                            comment_text = item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay']
-                            all_comments_to_process.append({
-                                "video_id": video_id,
-                                "text": comment_text,
-                                "original_index": i
-                            })
-                        
-                        chunk_size = 15
-                        comment_chunks = [all_comments_to_process[i:i + chunk_size] for i in range(0, len(all_comments_to_process), chunk_size)]
-                        
-                        progress_bar = st.progress(0, text="Procesando lotes de comentarios con la IA...")
-                        
-                        for i, chunk in enumerate(comment_chunks):
-                            video_id_for_chunk = chunk[0]['video_id']
-                            script = st.session_state.scripts.get(video_id_for_chunk, "")
-                            special_instructions, clean_script = process_script(script)
-                            
-                            drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, chunk, special_instructions)
-                            
-                            for draft in drafts_list:
-                                chunk_index = draft['id'] - 1
-                                if chunk_index < len(chunk):
-                                    original_index = chunk[chunk_index]['original_index']
-                                    st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
-                            
-                            progress_bar.progress((i + 1) / len(comment_chunks), text=f"Lote {i+1}/{len(comment_chunks)} procesado...")
-                            time.sleep(3)
-                        
-                        progress_bar.empty()
+                            if video_id not in comments_by_video:
+                                comments_by_video[video_id] = []
+                            comment_data = {"text": item['comment_thread']['snippet']['topLevelComment']['snippet']['textDisplay'], "original_index": i}
+                            comments_by_video[video_id].append(comment_data)
+
+                        with st.spinner("La IA está preparando los borradores con onda..."):
+                            for video_id, comments_data in comments_by_video.items():
+                                full_script_text = st.session_state.scripts.get(video_id, "")
+                                special_instructions, clean_script = process_script(full_script_text)
+                                
+                                id_to_index_map = {i+1: data['original_index'] for i, data in enumerate(comments_data)}
+                                drafts_list = get_ai_bulk_draft_responses(gemini_api_key, clean_script, comments_data, special_instructions)
+                                
+                                for draft in drafts_list:
+                                    original_index = id_to_index_map.get(draft['id'])
+                                    if original_index is not None and original_index < len(st.session_state.unanswered_comments):
+                                        st.session_state.unanswered_comments[original_index]['draft'] = draft['respuesta']
         
         if "unanswered_comments" in st.session_state and st.session_state.unanswered_comments:
             st.header("📬 Bandeja de Entrada Inteligente")
