@@ -185,7 +185,7 @@ def get_ai_draft_response(gemini_api_key, script, comment_text, special_instruct
         return "No se pudo generar el borrador."
 
 # --- Interfaz Principal de la Aplicación ---
-st.title("🧉 Copiloto de Comunidad v6.1")
+st.title("🧉 Copiloto de Comunidad v6.2")
 
 if 'credentials' not in st.session_state:
     authenticate()
@@ -316,7 +316,7 @@ else:
                             if full_text:
                                 if save_script_to_db(db, user_id, video_id, full_text):
                                     st.session_state.scripts[video_id] = full_text
-                                    st.rerun()
+                                    # ELIMINADO: st.rerun() para evitar el bucle de recarga.
                         
                         if video_id in st.session_state.scripts:
                             st.success("🟢 Guion cargado desde la base de datos.")
